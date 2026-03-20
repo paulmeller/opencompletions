@@ -1,0 +1,10 @@
+run = "node server.js --backend sprite --sprite-token \"$SPRITES_TOKEN\" --sprite-name \"$SPRITE_NAME\" --claude-token \"$CLAUDE_CODE_OAUTH_TOKEN\" --api-key \"$API_KEY\""
+language = "nodejs"
+entrypoint = "server.js"
+
+[deployment]
+run = ["node", "server.js", "--backend", "sprite", "--sprite-token", "$SPRITES_TOKEN", "--sprite-name", "$SPRITE_NAME", "--claude-token", "$CLAUDE_CODE_OAUTH_TOKEN", "--api-key", "$API_KEY", "--port", "3000"]
+deploymentTarget = "autoscale"
+
+[env]
+PORT = "3000"
