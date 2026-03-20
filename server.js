@@ -32,7 +32,7 @@
 
 const http = require("http");
 const { spawn } = require("child_process");
-const { randomUUID } = require("crypto");
+const { randomUUID, timingSafeEqual } = require("crypto");
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing
@@ -114,6 +114,29 @@ const vercelPool = [];
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
+const VALID_BACKENDS = ["local", "sprite", "vercel"];
+if (!VALID_BACKENDS.includes(BACKEND)) {
+  console.error(
+    `Error: --backend must be one of: ${VALID_BACKENDS.join(", ")} (got "${BACKEND}")`,
+  );
+  process.exit(1);
+}
+for (const [name, val] of [
+  ["port", PORT],
+  ["concurrency", MAX_CONCURRENCY],
+  ["timeout", TIMEOUT_MS],
+  ["queue-depth", MAX_QUEUE_DEPTH],
+]) {
+  if (Number.isNaN(val) || val <= 0) {
+    console.error(`Error: --${name} must be a positive number`);
+    process.exit(1);
+  }
+}
+if (!API_KEY) {
+  console.warn(
+    "WARNING: No --api-key configured. Server is open to all requests.",
+  );
+}
 if (BACKEND === "sprite" && !SPRITE_TOKEN) {
   console.error(
     "Error: --sprite-token or SPRITES_TOKEN env var required for sprite backend",
@@ -204,23 +227,33 @@ function drain() {
       ? [job.prompt, job.systemPrompt, job.onChunk, job.token]
       : [job.prompt, job.systemPrompt, job.token];
 
-    execFn(...execArgs)
-      .then(job.resolve)
-      .catch((err) => {
-        // One retry for transient backend failures
-        if (!job.retried && BACKEND !== "local") {
+    const canRetry = !streaming && BACKEND !== "local";
+
+    const run = async () => {
+      try {
+        const result = await execFn(...execArgs);
+        job.resolve(result);
+      } catch (err) {
+        if (canRetry && !job.retried) {
           job.retried = true;
           console.log(`Retrying after error: ${err.message}`);
-          return new Promise((r) => setTimeout(r, 1000)).then(() =>
-            execFn(...execArgs).then(job.resolve).catch(job.reject),
-          );
+          await new Promise((r) => setTimeout(r, 1000));
+          try {
+            const result = await execFn(...execArgs);
+            job.resolve(result);
+          } catch (retryErr) {
+            job.reject(retryErr);
+          }
+        } else {
+          job.reject(err);
         }
-        job.reject(err);
-      })
-      .finally(() => {
+      } finally {
         activeWorkers--;
         drain();
-      });
+      }
+    };
+
+    run();
   }
 }
 
@@ -383,7 +416,7 @@ async function initSpriteSetup(spriteName) {
   ].join("\n");
 
   const body = CLAUDE_TOKEN
-    ? `CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_TOKEN}`
+    ? `CLAUDE_CODE_OAUTH_TOKEN='${CLAUDE_TOKEN.replace(/'/g, "'\\''")}'`
     : "";
 
   const params = new URLSearchParams();
@@ -670,7 +703,13 @@ async function vercelStreamLogs(sandboxId, cmdId, onStdout, onStderr) {
       buffer = lines.pop();
       for (const line of lines) {
         if (!line.trim()) continue;
-        const event = JSON.parse(line);
+        let event;
+        try {
+          event = JSON.parse(line);
+        } catch {
+          console.warn(`Skipping non-JSON log line: ${line.slice(0, 100)}`);
+          continue;
+        }
         if (event.stream === "stdout" && onStdout) onStdout(event.data);
         else if (event.stream === "stderr" && onStderr) onStderr(event.data);
         else if (event.stream === "error")
@@ -692,16 +731,25 @@ async function vercelExitCode(sandboxId, cmdId) {
 }
 
 async function replaceVercelSandbox(sandbox) {
-  sandbox.replacing = true;
-  console.log(`Replacing dead sandbox ${sandbox.id}...`);
-  stopVercelSandbox(sandbox.id);
-  try {
-    const newSbx = await createVercelSandbox();
-    sandbox.id = newSbx.id;
-    console.log(`Replaced with ${newSbx.id}`);
-  } finally {
-    sandbox.replacing = false;
+  // Mutex: if already being replaced, wait for the existing replacement
+  if (sandbox.replacing) {
+    await sandbox._replacePromise;
+    return;
   }
+  sandbox.replacing = true;
+  sandbox._replacePromise = (async () => {
+    console.log(`Replacing dead sandbox ${sandbox.id}...`);
+    await stopVercelSandbox(sandbox.id);
+    try {
+      const newSbx = await createVercelSandbox();
+      sandbox.id = newSbx.id;
+      console.log(`Replaced with ${newSbx.id}`);
+    } finally {
+      sandbox.replacing = false;
+      sandbox._replacePromise = null;
+    }
+  })();
+  await sandbox._replacePromise;
 }
 
 async function runClaudeOnVercel(prompt, systemPrompt, clientToken) {
@@ -1041,7 +1089,7 @@ async function handleAnthropicStream(
 // ---------------------------------------------------------------------------
 function parseBody(req) {
   return new Promise((resolve, reject) => {
-    let body = "";
+    const chunks = [];
     let bytes = 0;
     let settled = false;
     req.on("data", (chunk) => {
@@ -1053,12 +1101,13 @@ function parseBody(req) {
         reject(new Error("Request body too large"));
         return;
       }
-      body += chunk;
+      chunks.push(chunk);
     });
     req.on("end", () => {
       if (settled) return;
       settled = true;
       try {
+        const body = Buffer.concat(chunks).toString("utf-8");
         resolve(body ? JSON.parse(body) : {});
       } catch {
         reject(new Error("Invalid JSON"));
@@ -1133,6 +1182,12 @@ const server = http.createServer(async (req, res) => {
   const start = Date.now();
 
   const sendJSON = (status, data) => {
+    if (res.headersSent) {
+      console.error(
+        `Cannot send ${status} — headers already sent for ${req.method} ${req.url}`,
+      );
+      return;
+    }
     const json = JSON.stringify(data, null, 2);
     res.writeHead(status, {
       "Content-Type": "application/json",
@@ -1154,16 +1209,20 @@ const server = http.createServer(async (req, res) => {
   const xApiKey = req.headers["x-api-key"] || "";
   const clientToken = bearerToken || xApiKey;
 
-  // Minimum length for an Anthropic key (prefix + enough entropy)
+  // Auth check: API key is always required when configured.
+  // Anthropic keys (sk-ant-*) are additionally forwarded to the backend.
   const MIN_ANTHROPIC_KEY_LEN = 20;
   const isAnthropicKey =
     clientToken.length >= MIN_ANTHROPIC_KEY_LEN &&
     (clientToken.startsWith("sk-ant-api") || clientToken.startsWith("sk-ant-oat"));
 
-  // Auth: Anthropic keys are forwarded to claude -p for validation.
-  // All other requests must match the server --api-key if one is configured.
-  if (API_KEY && !isAnthropicKey) {
-    if (clientToken !== API_KEY) {
+  if (API_KEY) {
+    // When an Anthropic key is sent, check it via x-api-key or a second header;
+    // the bearer token must still match the server API key.
+    const keyToCheck = isAnthropicKey && xApiKey ? bearerToken : clientToken;
+    const a = Buffer.from(keyToCheck);
+    const b = Buffer.from(API_KEY);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
       return sendJSON(401, {
         error: {
           message: "Invalid API key",
@@ -1174,7 +1233,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // Only forward Anthropic keys to the backend; server API_KEY is just a gate
+  // Forward Anthropic keys to the backend for downstream auth
   const forwardToken = isAnthropicKey ? clientToken : null;
 
   const url = req.url.split("?")[0];
