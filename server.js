@@ -177,12 +177,13 @@ function releaseVercelSandbox(sandbox) {
 // ---------------------------------------------------------------------------
 // Request queue
 // ---------------------------------------------------------------------------
-function enqueue(prompt, systemPrompt, onChunk) {
+function enqueue(prompt, systemPrompt, opts = {}) {
+  const { token = null, onChunk = null } = opts;
   if (queue.length >= MAX_QUEUE_DEPTH) {
     return Promise.reject(new Error("Server too busy"));
   }
   return new Promise((resolve, reject) => {
-    queue.push({ resolve, reject, prompt, systemPrompt, onChunk });
+    queue.push({ resolve, reject, prompt, systemPrompt, token, onChunk });
     drain();
   });
 }
@@ -200,8 +201,8 @@ function drain() {
     };
     const execFn = execFns[BACKEND];
     const execArgs = streaming
-      ? [job.prompt, job.systemPrompt, job.onChunk]
-      : [job.prompt, job.systemPrompt];
+      ? [job.prompt, job.systemPrompt, job.onChunk, job.token]
+      : [job.prompt, job.systemPrompt, job.token];
 
     execFn(...execArgs)
       .then(job.resolve)
@@ -224,6 +225,24 @@ function drain() {
 }
 
 // ---------------------------------------------------------------------------
+// Auth env helper – resolve per-request token with server fallback
+// ---------------------------------------------------------------------------
+function buildAuthEnv(clientToken) {
+  const env = {};
+  const token = clientToken || CLAUDE_TOKEN;
+  if (token) {
+    if (token.startsWith("sk-ant-api")) {
+      env.ANTHROPIC_API_KEY = token;
+      env.CLAUDE_CODE_OAUTH_TOKEN = ""; // clear to avoid ambiguity
+    } else {
+      env.CLAUDE_CODE_OAUTH_TOKEN = token;
+      env.ANTHROPIC_API_KEY = ""; // clear to avoid ambiguity
+    }
+  }
+  return env;
+}
+
+// ---------------------------------------------------------------------------
 // Output cleaning
 // ---------------------------------------------------------------------------
 function cleanOutput(text) {
@@ -237,7 +256,7 @@ function cleanChunk(text) {
 // ---------------------------------------------------------------------------
 // Backend: Local subprocess
 // ---------------------------------------------------------------------------
-function runClaudeLocal(prompt, systemPrompt) {
+function runClaudeLocal(prompt, systemPrompt, clientToken) {
   return new Promise((resolve, reject) => {
     const cliArgs = ["-p", "--max-turns", MAX_TURNS, "--output-format", "text"];
 
@@ -245,8 +264,7 @@ function runClaudeLocal(prompt, systemPrompt) {
       cliArgs.push("--system-prompt", systemPrompt);
     }
 
-    const env = { ...process.env };
-    if (CLAUDE_TOKEN) env.CLAUDE_CODE_OAUTH_TOKEN = CLAUDE_TOKEN;
+    const env = { ...process.env, ...buildAuthEnv(clientToken) };
 
     const proc = spawn("claude", cliArgs, {
       stdio: ["pipe", "pipe", "pipe"],
@@ -297,13 +315,12 @@ function runClaudeLocal(prompt, systemPrompt) {
   });
 }
 
-function runClaudeLocalStreaming(prompt, systemPrompt, onChunk) {
+function runClaudeLocalStreaming(prompt, systemPrompt, onChunk, clientToken) {
   return new Promise((resolve, reject) => {
     const cliArgs = ["-p", "--max-turns", MAX_TURNS, "--output-format", "text"];
     if (systemPrompt) cliArgs.push("--system-prompt", systemPrompt);
 
-    const env = { ...process.env };
-    if (CLAUDE_TOKEN) env.CLAUDE_CODE_OAUTH_TOKEN = CLAUDE_TOKEN;
+    const env = { ...process.env, ...buildAuthEnv(clientToken) };
 
     const proc = spawn("claude", cliArgs, {
       stdio: ["pipe", "pipe", "pipe"],
@@ -438,7 +455,10 @@ function buildSpriteExecUrl(spriteName, systemPrompt) {
   )}/exec?${params.toString()}`;
 }
 
-async function runClaudeOnSprite(prompt, systemPrompt) {
+async function runClaudeOnSprite(prompt, systemPrompt, clientToken) {
+  if (clientToken) {
+    console.warn("Warning: sprite backend does not support per-request tokens; using server token");
+  }
   const sprite = acquireSprite();
 
   try {
@@ -485,7 +505,10 @@ async function runClaudeOnSprite(prompt, systemPrompt) {
   }
 }
 
-async function runClaudeSpriteStreaming(prompt, systemPrompt, onChunk) {
+async function runClaudeSpriteStreaming(prompt, systemPrompt, onChunk, clientToken) {
+  if (clientToken) {
+    console.warn("Warning: sprite backend does not support per-request tokens; using server token");
+  }
   const sprite = acquireSprite();
 
   try {
@@ -606,10 +629,8 @@ function buildVercelClaudeArgs(prompt, systemPrompt) {
   return cmdArgs;
 }
 
-function buildVercelEnv() {
-  const env = {};
-  if (CLAUDE_TOKEN) env.CLAUDE_CODE_OAUTH_TOKEN = CLAUDE_TOKEN;
-  return env;
+function buildVercelEnv(clientToken) {
+  return buildAuthEnv(clientToken);
 }
 
 async function vercelExec(sandboxId, cmdArgs, env) {
@@ -683,11 +704,11 @@ async function replaceVercelSandbox(sandbox) {
   }
 }
 
-async function runClaudeOnVercel(prompt, systemPrompt) {
+async function runClaudeOnVercel(prompt, systemPrompt, clientToken) {
   const sandbox = acquireVercelSandbox();
   try {
     const cmdArgs = buildVercelClaudeArgs(prompt, systemPrompt);
-    const env = buildVercelEnv();
+    const env = buildVercelEnv(clientToken);
     let cmdId;
     try {
       cmdId = await vercelExec(sandbox.id, cmdArgs, env);
@@ -726,11 +747,11 @@ async function runClaudeOnVercel(prompt, systemPrompt) {
   }
 }
 
-async function runClaudeVercelStreaming(prompt, systemPrompt, onChunk) {
+async function runClaudeVercelStreaming(prompt, systemPrompt, onChunk, clientToken) {
   const sandbox = acquireVercelSandbox();
   try {
     const cmdArgs = buildVercelClaudeArgs(prompt, systemPrompt);
-    const env = buildVercelEnv();
+    const env = buildVercelEnv(clientToken);
     let cmdId;
     try {
       cmdId = await vercelExec(sandbox.id, cmdArgs, env);
@@ -868,6 +889,7 @@ async function handleOpenAIChatStream(
   prompt,
   systemPrompt,
   model,
+  clientToken,
 ) {
   const id = `chatcmpl-${randomUUID().replace(/-/g, "").slice(0, 24)}`;
   const created = Math.floor(Date.now() / 1000);
@@ -885,7 +907,7 @@ async function handleOpenAIChatStream(
   });
 
   try {
-    await enqueue(prompt, systemPrompt, (text) => {
+    await enqueue(prompt, systemPrompt, { token: clientToken, onChunk: (text) => {
       sseData(res, {
         id,
         object: "chat.completion.chunk",
@@ -893,7 +915,7 @@ async function handleOpenAIChatStream(
         model: m,
         choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
       });
-    });
+    }});
 
     // Stop chunk
     sseData(res, {
@@ -913,7 +935,7 @@ async function handleOpenAIChatStream(
   res.end();
 }
 
-async function handleOpenAICompletionsStream(req, res, start, prompt, model) {
+async function handleOpenAICompletionsStream(req, res, start, prompt, model, clientToken) {
   const id = `cmpl-${randomUUID().replace(/-/g, "").slice(0, 24)}`;
   const created = Math.floor(Date.now() / 1000);
   const m = model || MODEL_NAME;
@@ -921,7 +943,7 @@ async function handleOpenAICompletionsStream(req, res, start, prompt, model) {
   initSSE(res, req, start);
 
   try {
-    await enqueue(prompt, null, (text) => {
+    await enqueue(prompt, null, { token: clientToken, onChunk: (text) => {
       sseData(res, {
         id,
         object: "text_completion",
@@ -929,7 +951,7 @@ async function handleOpenAICompletionsStream(req, res, start, prompt, model) {
         model: m,
         choices: [{ index: 0, text, finish_reason: null }],
       });
-    });
+    }});
 
     sseData(res, {
       id,
@@ -955,6 +977,7 @@ async function handleAnthropicStream(
   prompt,
   systemPrompt,
   model,
+  clientToken,
 ) {
   const id = `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
   const m = model || MODEL_NAME;
@@ -984,13 +1007,13 @@ async function handleAnthropicStream(
   sseEvent(res, "ping", { type: "ping" });
 
   try {
-    await enqueue(prompt, systemPrompt, (text) => {
+    await enqueue(prompt, systemPrompt, { token: clientToken, onChunk: (text) => {
       sseEvent(res, "content_block_delta", {
         type: "content_block_delta",
         index: 0,
         delta: { type: "text_delta", text },
       });
-    });
+    }});
 
     sseEvent(res, "content_block_stop", {
       type: "content_block_stop",
@@ -1125,11 +1148,22 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "OPTIONS") return sendJSON(204, {});
 
-  // Auth check
-  if (API_KEY) {
-    const auth = req.headers.authorization || "";
-    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-    if (token !== API_KEY) {
+  // Extract bearer token from Authorization header or Anthropic x-api-key header
+  const authHeader = req.headers.authorization || "";
+  const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+  const xApiKey = req.headers["x-api-key"] || "";
+  const clientToken = bearerToken || xApiKey;
+
+  // Minimum length for an Anthropic key (prefix + enough entropy)
+  const MIN_ANTHROPIC_KEY_LEN = 20;
+  const isAnthropicKey =
+    clientToken.length >= MIN_ANTHROPIC_KEY_LEN &&
+    (clientToken.startsWith("sk-ant-api") || clientToken.startsWith("sk-ant-oat"));
+
+  // Auth: Anthropic keys are forwarded to claude -p for validation.
+  // All other requests must match the server --api-key if one is configured.
+  if (API_KEY && !isAnthropicKey) {
+    if (clientToken !== API_KEY) {
       return sendJSON(401, {
         error: {
           message: "Invalid API key",
@@ -1139,6 +1173,9 @@ const server = http.createServer(async (req, res) => {
       });
     }
   }
+
+  // Only forward Anthropic keys to the backend; server API_KEY is just a gate
+  const forwardToken = isAnthropicKey ? clientToken : null;
 
   const url = req.url.split("?")[0];
 
@@ -1156,7 +1193,9 @@ const server = http.createServer(async (req, res) => {
           openai_chat: "POST /v1/chat/completions",
           openai_completions: "POST /v1/completions",
           anthropic_messages: "POST /v1/messages",
+          anthropic_count_tokens: "POST /v1/messages/count_tokens",
           models: "GET  /v1/models",
+          model_detail: "GET  /v1/models/:id",
         },
       };
       if (BACKEND === "sprite") {
@@ -1179,6 +1218,26 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(200, buildOpenAIModelsResponse());
     }
 
+    // ----- OpenAI: GET /v1/models/:id -----
+    if (url.startsWith("/v1/models/") && req.method === "GET") {
+      const modelId = decodeURIComponent(url.slice("/v1/models/".length));
+      if (modelId === MODEL_NAME) {
+        return sendJSON(200, {
+          id: MODEL_NAME,
+          object: "model",
+          created: Math.floor(Date.now() / 1000),
+          owned_by: "local",
+        });
+      }
+      return sendJSON(404, {
+        error: {
+          message: `The model '${modelId}' does not exist`,
+          type: "invalid_request_error",
+          code: "model_not_found",
+        },
+      });
+    }
+
     // ----- OpenAI: POST /v1/chat/completions -----
     if (url === "/v1/chat/completions" && req.method === "POST") {
       const body = await parseBody(req);
@@ -1195,9 +1254,10 @@ const server = http.createServer(async (req, res) => {
           prompt,
           systemPrompt,
           body.model,
+          forwardToken,
         );
       }
-      const text = await enqueue(prompt, systemPrompt);
+      const text = await enqueue(prompt, systemPrompt, { token: forwardToken });
       return sendJSON(200, buildOpenAIResponse(text, body.model, true));
     }
 
@@ -1217,9 +1277,10 @@ const server = http.createServer(async (req, res) => {
           start,
           p,
           body.model,
+          forwardToken,
         );
       }
-      const text = await enqueue(p, null);
+      const text = await enqueue(p, null, { token: forwardToken });
       return sendJSON(200, buildOpenAIResponse(text, body.model, false));
     }
 
@@ -1239,10 +1300,21 @@ const server = http.createServer(async (req, res) => {
           prompt,
           systemPrompt,
           body.model,
+          forwardToken,
         );
       }
-      const text = await enqueue(prompt, systemPrompt);
+      const text = await enqueue(prompt, systemPrompt, { token: forwardToken });
       return sendJSON(200, buildAnthropicResponse(text, body.model));
+    }
+
+    // ----- Anthropic: POST /v1/messages/count_tokens -----
+    if (url === "/v1/messages/count_tokens" && req.method === "POST") {
+      const body = await parseBody(req);
+      const { prompt, systemPrompt } = extractAnthropicPrompt(body);
+      // Rough estimate: ~4 characters per token
+      const inputText = (systemPrompt || "") + (prompt || "");
+      const inputTokens = Math.ceil(inputText.length / 4);
+      return sendJSON(200, { input_tokens: inputTokens });
     }
 
     // ----- Queue status -----
@@ -1308,12 +1380,14 @@ async function start() {
 ║  Timeout:     ${String(TIMEOUT_MS + "ms").padEnd(43)}║
 ║                                                          ║
 ║  Endpoints:                                              ║
-║    POST /v1/chat/completions   (OpenAI chat)             ║
-║    POST /v1/completions        (OpenAI completions)      ║
-║    POST /v1/messages           (Anthropic messages)      ║
-║    GET  /v1/models             (OpenAI models list)      ║
-║    GET  /v1/status             (Queue status)            ║
-║    GET  /                      (Health check)            ║
+║    POST /v1/chat/completions      (OpenAI chat)          ║
+║    POST /v1/completions           (OpenAI completions)   ║
+║    POST /v1/messages              (Anthropic messages)   ║
+║    POST /v1/messages/count_tokens (Anthropic tokens)     ║
+║    GET  /v1/models                (Model list)           ║
+║    GET  /v1/models/:id            (Model detail)         ║
+║    GET  /v1/status                (Queue status)         ║
+║    GET  /                         (Health check)         ║
 ║                                                          ║
 ╚══════════════════════════════════════════════════════════╝
 `);
