@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(git clone:*)",
+      "Bash(shopt -s dotglob)",
+      "Bash(cp -r /tmp/opencompletions/* /home/runner/workspace/)",
+      "Bash(cp -r /tmp/opencompletions/.git /home/runner/workspace/)",
+      "Bash(rm -rf /home/runner/workspace/.git)",
+      "Bash(shopt:*)"
+    ]
+  }
+}

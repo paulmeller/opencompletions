@@ -8,3 +8,7 @@ deploymentTarget = "autoscale"
 
 [env]
 PORT = "3000"
+
+[[ports]]
+localPort = 3456
+externalPort = 80
