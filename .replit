@@ -11,12 +11,11 @@ deploymentTarget = "autoscale"
 PORT = "3000"
 
 [[ports]]
-localPort = 3000
-externalPort = 3000
+localPort = 80
 
 [[ports]]
-localPort = 3456
-externalPort = 80
+localPort = 3000
+externalPort = 3000
 
 [agent]
 expertMode = true
@@ -37,10 +36,10 @@ args = "Start application"
 name = "Start application"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "node server.js --port 3000"
-waitForPort = 3000
-
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node proxy.js & node server.js --port 3000"
+waitForPort = 3000
