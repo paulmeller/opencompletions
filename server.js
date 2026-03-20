@@ -177,22 +177,13 @@ function releaseVercelSandbox(sandbox) {
 // ---------------------------------------------------------------------------
 // Request queue
 // ---------------------------------------------------------------------------
-function enqueue(prompt, systemPrompt, onChunkOrToken, onChunkIfToken) {
-  // Supports: enqueue(p, s), enqueue(p, s, token), enqueue(p, s, onChunk),
-  //           enqueue(p, s, token, onChunk)
-  let clientToken = null;
-  let onChunk = null;
-  if (typeof onChunkOrToken === "function") {
-    onChunk = onChunkOrToken;
-  } else if (typeof onChunkOrToken === "string") {
-    clientToken = onChunkOrToken;
-    onChunk = onChunkIfToken || null;
-  }
+function enqueue(prompt, systemPrompt, opts = {}) {
+  const { token = null, onChunk = null } = opts;
   if (queue.length >= MAX_QUEUE_DEPTH) {
     return Promise.reject(new Error("Server too busy"));
   }
   return new Promise((resolve, reject) => {
-    queue.push({ resolve, reject, prompt, systemPrompt, clientToken, onChunk });
+    queue.push({ resolve, reject, prompt, systemPrompt, token, onChunk });
     drain();
   });
 }
@@ -210,8 +201,8 @@ function drain() {
     };
     const execFn = execFns[BACKEND];
     const execArgs = streaming
-      ? [job.prompt, job.systemPrompt, job.onChunk, job.clientToken]
-      : [job.prompt, job.systemPrompt, job.clientToken];
+      ? [job.prompt, job.systemPrompt, job.onChunk, job.token]
+      : [job.prompt, job.systemPrompt, job.token];
 
     execFn(...execArgs)
       .then(job.resolve)
@@ -242,8 +233,10 @@ function buildAuthEnv(clientToken) {
   if (token) {
     if (token.startsWith("sk-ant-api")) {
       env.ANTHROPIC_API_KEY = token;
+      env.CLAUDE_CODE_OAUTH_TOKEN = ""; // clear to avoid ambiguity
     } else {
       env.CLAUDE_CODE_OAUTH_TOKEN = token;
+      env.ANTHROPIC_API_KEY = ""; // clear to avoid ambiguity
     }
   }
   return env;
@@ -462,7 +455,10 @@ function buildSpriteExecUrl(spriteName, systemPrompt) {
   )}/exec?${params.toString()}`;
 }
 
-async function runClaudeOnSprite(prompt, systemPrompt, _clientToken) {
+async function runClaudeOnSprite(prompt, systemPrompt, clientToken) {
+  if (clientToken) {
+    console.warn("Warning: sprite backend does not support per-request tokens; using server token");
+  }
   const sprite = acquireSprite();
 
   try {
@@ -509,7 +505,10 @@ async function runClaudeOnSprite(prompt, systemPrompt, _clientToken) {
   }
 }
 
-async function runClaudeSpriteStreaming(prompt, systemPrompt, onChunk, _clientToken) {
+async function runClaudeSpriteStreaming(prompt, systemPrompt, onChunk, clientToken) {
+  if (clientToken) {
+    console.warn("Warning: sprite backend does not support per-request tokens; using server token");
+  }
   const sprite = acquireSprite();
 
   try {
@@ -908,7 +907,7 @@ async function handleOpenAIChatStream(
   });
 
   try {
-    await enqueue(prompt, systemPrompt, clientToken, (text) => {
+    await enqueue(prompt, systemPrompt, { token: clientToken, onChunk: (text) => {
       sseData(res, {
         id,
         object: "chat.completion.chunk",
@@ -916,7 +915,7 @@ async function handleOpenAIChatStream(
         model: m,
         choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
       });
-    });
+    }});
 
     // Stop chunk
     sseData(res, {
@@ -944,7 +943,7 @@ async function handleOpenAICompletionsStream(req, res, start, prompt, model, cli
   initSSE(res, req, start);
 
   try {
-    await enqueue(prompt, null, clientToken, (text) => {
+    await enqueue(prompt, null, { token: clientToken, onChunk: (text) => {
       sseData(res, {
         id,
         object: "text_completion",
@@ -952,7 +951,7 @@ async function handleOpenAICompletionsStream(req, res, start, prompt, model, cli
         model: m,
         choices: [{ index: 0, text, finish_reason: null }],
       });
-    });
+    }});
 
     sseData(res, {
       id,
@@ -1008,13 +1007,13 @@ async function handleAnthropicStream(
   sseEvent(res, "ping", { type: "ping" });
 
   try {
-    await enqueue(prompt, systemPrompt, clientToken, (text) => {
+    await enqueue(prompt, systemPrompt, { token: clientToken, onChunk: (text) => {
       sseEvent(res, "content_block_delta", {
         type: "content_block_delta",
         index: 0,
         delta: { type: "text_delta", text },
       });
-    });
+    }});
 
     sseEvent(res, "content_block_stop", {
       type: "content_block_stop",
@@ -1149,14 +1148,20 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "OPTIONS") return sendJSON(204, {});
 
-  // Extract bearer token from request
+  // Extract bearer token from Authorization header or Anthropic x-api-key header
   const authHeader = req.headers.authorization || "";
-  const clientToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+  const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+  const xApiKey = req.headers["x-api-key"] || "";
+  const clientToken = bearerToken || xApiKey;
 
-  // Auth check: client token is accepted if it looks like an Anthropic key
-  // (will be validated downstream by claude -p). Otherwise fall back to
-  // server API_KEY gating.
-  const isAnthropicKey = clientToken.startsWith("sk-ant-");
+  // Minimum length for an Anthropic key (prefix + enough entropy)
+  const MIN_ANTHROPIC_KEY_LEN = 20;
+  const isAnthropicKey =
+    clientToken.length >= MIN_ANTHROPIC_KEY_LEN &&
+    (clientToken.startsWith("sk-ant-api") || clientToken.startsWith("sk-ant-oat"));
+
+  // Auth: Anthropic keys are forwarded to claude -p for validation.
+  // All other requests must match the server --api-key if one is configured.
   if (API_KEY && !isAnthropicKey) {
     if (clientToken !== API_KEY) {
       return sendJSON(401, {
@@ -1252,7 +1257,7 @@ const server = http.createServer(async (req, res) => {
           forwardToken,
         );
       }
-      const text = await enqueue(prompt, systemPrompt, forwardToken);
+      const text = await enqueue(prompt, systemPrompt, { token: forwardToken });
       return sendJSON(200, buildOpenAIResponse(text, body.model, true));
     }
 
@@ -1275,7 +1280,7 @@ const server = http.createServer(async (req, res) => {
           forwardToken,
         );
       }
-      const text = await enqueue(p, null, forwardToken);
+      const text = await enqueue(p, null, { token: forwardToken });
       return sendJSON(200, buildOpenAIResponse(text, body.model, false));
     }
 
@@ -1298,7 +1303,7 @@ const server = http.createServer(async (req, res) => {
           forwardToken,
         );
       }
-      const text = await enqueue(prompt, systemPrompt, forwardToken);
+      const text = await enqueue(prompt, systemPrompt, { token: forwardToken });
       return sendJSON(200, buildAnthropicResponse(text, body.model));
     }
 
