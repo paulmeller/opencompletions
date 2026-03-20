@@ -11,9 +11,6 @@ deploymentTarget = "autoscale"
 PORT = "3000"
 
 [[ports]]
-localPort = 80
-
-[[ports]]
 localPort = 3000
 externalPort = 3000
 
@@ -41,5 +38,5 @@ outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "node proxy.js & node server.js --port 3000"
+args = "node server.js --port 3000"
 waitForPort = 3000
