@@ -1,6 +1,7 @@
 run = "node server.js --backend sprite --sprite-token \"$SPRITES_TOKEN\" --sprite-name \"$SPRITE_NAME\" --claude-token \"$CLAUDE_CODE_OAUTH_TOKEN\" --api-key \"$API_KEY\""
 language = "nodejs"
 entrypoint = "server.js"
+modules = ["nodejs-20"]
 
 [deployment]
 run = ["node", "server.js", "--backend", "sprite", "--sprite-token", "$SPRITES_TOKEN", "--sprite-name", "$SPRITE_NAME", "--claude-token", "$CLAUDE_CODE_OAUTH_TOKEN", "--api-key", "$API_KEY", "--port", "3000"]
@@ -10,5 +11,36 @@ deploymentTarget = "autoscale"
 PORT = "3000"
 
 [[ports]]
+localPort = 3000
+externalPort = 3000
+
+[[ports]]
 localPort = 3456
 externalPort = 80
+
+[agent]
+expertMode = true
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start application"
+
+[[workflows.workflow]]
+name = "Start application"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node server.js --port 3000"
+waitForPort = 3000
+
+[workflows.workflow.metadata]
+outputType = "console"

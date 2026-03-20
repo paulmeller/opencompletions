@@ -7,7 +7,12 @@
       "Bash(cp -r /tmp/opencompletions/* /home/runner/workspace/)",
       "Bash(cp -r /tmp/opencompletions/.git /home/runner/workspace/)",
       "Bash(rm -rf /home/runner/workspace/.git)",
-      "Bash(shopt:*)"
+      "Bash(shopt:*)",
+      "Bash(curl:*)",
+      "Bash(pkill -f \"node.*server.js\")",
+      "Bash(lsof -ti:3456)",
+      "Bash(xargs kill:*)",
+      "Bash(fuser -k 3456/tcp)"
     ]
   }
 }
