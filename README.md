@@ -149,6 +149,25 @@ curl -N http://localhost:3456/v1/messages \
   }'
 ```
 
+**GET /v1/models/:id**
+
+```bash
+curl http://localhost:3456/v1/models/claude-code \
+  -H "Authorization: Bearer $API_KEY"
+```
+
+**POST /v1/messages/count_tokens**
+
+```bash
+curl http://localhost:3456/v1/messages/count_tokens \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" \
+  -d '{
+    "model": "claude-code",
+    "messages": [{"role": "user", "content": "What is 2+2?"}]
+  }'
+```
+
 ### Utility
 
 | Endpoint        | Description                    |

@@ -1156,7 +1156,9 @@ const server = http.createServer(async (req, res) => {
           openai_chat: "POST /v1/chat/completions",
           openai_completions: "POST /v1/completions",
           anthropic_messages: "POST /v1/messages",
+          anthropic_count_tokens: "POST /v1/messages/count_tokens",
           models: "GET  /v1/models",
+          model_detail: "GET  /v1/models/:id",
         },
       };
       if (BACKEND === "sprite") {
@@ -1177,6 +1179,26 @@ const server = http.createServer(async (req, res) => {
     // ----- OpenAI: GET /v1/models -----
     if (url === "/v1/models" && req.method === "GET") {
       return sendJSON(200, buildOpenAIModelsResponse());
+    }
+
+    // ----- OpenAI: GET /v1/models/:id -----
+    if (url.startsWith("/v1/models/") && req.method === "GET") {
+      const modelId = decodeURIComponent(url.slice("/v1/models/".length));
+      if (modelId === MODEL_NAME) {
+        return sendJSON(200, {
+          id: MODEL_NAME,
+          object: "model",
+          created: Math.floor(Date.now() / 1000),
+          owned_by: "local",
+        });
+      }
+      return sendJSON(404, {
+        error: {
+          message: `The model '${modelId}' does not exist`,
+          type: "invalid_request_error",
+          code: "model_not_found",
+        },
+      });
     }
 
     // ----- OpenAI: POST /v1/chat/completions -----
@@ -1245,6 +1267,16 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(200, buildAnthropicResponse(text, body.model));
     }
 
+    // ----- Anthropic: POST /v1/messages/count_tokens -----
+    if (url === "/v1/messages/count_tokens" && req.method === "POST") {
+      const body = await parseBody(req);
+      const { prompt, systemPrompt } = extractAnthropicPrompt(body);
+      // Rough estimate: ~4 characters per token
+      const inputText = (systemPrompt || "") + (prompt || "");
+      const inputTokens = Math.ceil(inputText.length / 4);
+      return sendJSON(200, { input_tokens: inputTokens });
+    }
+
     // ----- Queue status -----
     if (url === "/v1/status" && req.method === "GET") {
       const status = {
@@ -1308,12 +1340,14 @@ async function start() {
 ║  Timeout:     ${String(TIMEOUT_MS + "ms").padEnd(43)}║
 ║                                                          ║
 ║  Endpoints:                                              ║
-║    POST /v1/chat/completions   (OpenAI chat)             ║
-║    POST /v1/completions        (OpenAI completions)      ║
-║    POST /v1/messages           (Anthropic messages)      ║
-║    GET  /v1/models             (OpenAI models list)      ║
-║    GET  /v1/status             (Queue status)            ║
-║    GET  /                      (Health check)            ║
+║    POST /v1/chat/completions      (OpenAI chat)          ║
+║    POST /v1/completions           (OpenAI completions)   ║
+║    POST /v1/messages              (Anthropic messages)   ║
+║    POST /v1/messages/count_tokens (Anthropic tokens)     ║
+║    GET  /v1/models                (Model list)           ║
+║    GET  /v1/models/:id            (Model detail)         ║
+║    GET  /v1/status                (Queue status)         ║
+║    GET  /                         (Health check)         ║
 ║                                                          ║
 ╚══════════════════════════════════════════════════════════╝
 `);
