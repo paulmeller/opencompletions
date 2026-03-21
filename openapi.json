@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "OpenCompletions API",
-    "description": "A lightweight server wrapping Claude Code CLI as a completions and agent API, with OpenAI-compatible, Anthropic-compatible, and multi-turn Agent endpoints. Supports multiple CLI backends via the `--cli claude|opencode` flag (default: `claude`).",
+    "description": "A lightweight server wrapping AI coding CLIs as a completions and agent API, with OpenAI-compatible, Anthropic-compatible, and multi-turn Agent endpoints. Supports multiple CLI backends (`--cli claude|opencode`), multiple execution backends (local, sprite, vercel), and per-request auth token forwarding via the `x-api-key` header.",
     "version": "1.0.0",
     "license": {
       "name": "MIT"
@@ -437,7 +437,13 @@
       "BearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "API key configured via `--api-key` flag. Also accepts Anthropic API keys (sk-ant-*) which are forwarded to the backend."
+        "description": "Server API key configured via `--api-key` flag."
+      },
+      "ProviderKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key",
+        "description": "Provider auth token (e.g. Anthropic OAuth or API key) forwarded to the CLI backend per-request."
       }
     },
     "schemas": {

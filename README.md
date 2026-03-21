@@ -1,11 +1,17 @@
 # OpenCompletions
 
-A lightweight, zero-dependency server that wraps `claude -p` as a local completions API, exposing OpenAI-compatible, Anthropic-compatible, and multi-turn Agent endpoints with SSE streaming support.
+A lightweight, zero-dependency server that wraps AI coding CLIs as a completions API, exposing OpenAI-compatible, Anthropic-compatible, and multi-turn Agent endpoints with SSE streaming support.
 
-Supports three backends:
-- **Local** — spawns `claude` as a subprocess on your machine
+Supports two CLI backends:
+- **Claude Code** (`--cli claude`, default) — Anthropic's coding agent
+- **OpenCode** (`--cli opencode`) — provider-agnostic agent supporting Anthropic, OpenAI, Google, Groq, and more
+
+Supports three execution backends:
+- **Local** — spawns the CLI as a subprocess on your machine
 - **Sprite** — delegates execution to one or more [Sprites.dev](https://sprites.dev) VMs
 - **Vercel** — delegates execution to [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) microVMs
+
+Auth tokens flow per-request via the `x-api-key` header — no server-side secrets needed for LLM credentials.
 
 ## Prerequisites
 
@@ -28,8 +34,7 @@ node server.js
 node server.js \
   --backend sprite \
   --sprite-token "$SPRITE_TOKEN" \
-  --sprite-name my-claude-sprite \
-  --claude-token "$CLAUDE_CODE_OAUTH_TOKEN"
+  --sprite-name my-claude-sprite
 ```
 
 ### Vercel mode
@@ -39,8 +44,8 @@ node server.js \
   --backend vercel \
   --vercel-token "$VERCEL_TOKEN" \
   --vercel-team-id "$VERCEL_TEAM_ID" \
-  --vercel-snapshot-id "$VERCEL_SNAPSHOT_ID" \
-  --claude-token "$CLAUDE_CODE_OAUTH_TOKEN"
+  --vercel-project-id "$VERCEL_PROJECT_ID" \
+  --vercel-snapshot-id "$VERCEL_SNAPSHOT_ID"
 ```
 
 ### OpenCode mode
@@ -57,6 +62,20 @@ node server.js --api-key "my-secret-key" ...
 
 All endpoints will require `Authorization: Bearer my-secret-key`.
 
+### Per-request LLM auth
+
+Pass your Anthropic (or other provider) token via the `x-api-key` header. The server forwards it to the CLI backend:
+
+```bash
+curl http://localhost:3456/v1/chat/completions \
+  -H "Authorization: Bearer my-secret-key" \
+  -H "x-api-key: sk-ant-oat01-YOUR-TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"Hello!"}]}'
+```
+
+`Authorization: Bearer` authenticates to the server. `x-api-key` is forwarded to the CLI for LLM auth. This works with all backends including sprites and Vercel sandboxes — no need to configure tokens on the server.
+
 ## Options
 
 | Flag                | Default                        | Description                              |
@@ -68,7 +87,8 @@ All endpoints will require `Authorization: Bearer my-secret-key`.
 | `--queue-depth`     | 100                            | Max queued requests before 503           |
 | `--api-key`         | `$API_KEY`                     | Bearer token for all endpoints           |
 | `--backend`         | local                          | `local`, `sprite`, or `vercel`           |
-| `--claude-token`    | `$CLAUDE_CODE_OAUTH_TOKEN`     | Claude Code OAuth token                  |
+| `--anthropic-api-key`| `$ANTHROPIC_API_KEY`          | Anthropic API key (server-side fallback) |
+| `--claude-token`    | `$CLAUDE_CODE_OAUTH_TOKEN`     | Claude OAuth token (server-side fallback)|
 | `--sprite-token`    | `$SPRITE_TOKEN`               | Sprites.dev auth token                   |
 | `--sprite-name`     | *(required for sprite mode)*   | Sprite name (repeat for pool)            |
 | `--sprite-api`      | `https://api.sprites.dev`      | Sprites API base URL                     |
@@ -411,7 +431,6 @@ docker run -p 3456:3456 opencompletions \
   --backend sprite \
   --sprite-token "$SPRITE_TOKEN" \
   --sprite-name my-sprite \
-  --claude-token "$CLAUDE_CODE_OAUTH_TOKEN" \
   --api-key "$API_KEY"
 ```
 
@@ -431,7 +450,6 @@ container run -p 3456:3456 opencompletions \
   --backend sprite \
   --sprite-token "$SPRITE_TOKEN" \
   --sprite-name my-sprite \
-  --claude-token "$CLAUDE_CODE_OAUTH_TOKEN" \
   --api-key "$API_KEY"
 
 # Run detached
@@ -439,7 +457,6 @@ container run -d --name claude-api -p 3456:3456 opencompletions \
   --backend sprite \
   --sprite-token "$SPRITE_TOKEN" \
   --sprite-name my-sprite \
-  --claude-token "$CLAUDE_CODE_OAUTH_TOKEN" \
   --api-key "$API_KEY"
 
 # View logs / stop
@@ -451,7 +468,6 @@ You can also pass secrets via `--env-file`:
 
 ```bash
 echo 'SPRITE_TOKEN=...' > .env
-echo 'CLAUDE_CODE_OAUTH_TOKEN=...' >> .env
 echo 'API_KEY=...' >> .env
 
 container run -p 3456:3456 --env-file .env opencompletions \
@@ -494,42 +510,18 @@ node server.js \
   --sprite-name claude-worker-1 \
   --sprite-name claude-worker-2 \
   --sprite-name claude-worker-3 \
-  --claude-token "$CLAUDE_CODE_OAUTH_TOKEN" \
   --concurrency 3
 ```
 
 ## Setting Up Vercel Sandboxes
 
-### 1. Create a project and snapshot
+### 1. Create a snapshot with Claude Code
 
 ```bash
-# Install Vercel CLI
-npm install -g vercel
-vercel login
-
-# Create a project for sandboxes
-curl -s -X POST "https://api.vercel.com/v10/projects?teamId=$VERCEL_TEAM_ID" \
-  -H "Authorization: Bearer $VERCEL_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"claude-sandboxes"}'
-
 # Create a sandbox, install Claude Code, and snapshot it
-SANDBOX_ID=$(curl -s -X POST "https://api.vercel.com/v1/sandboxes?teamId=$VERCEL_TEAM_ID" \
-  -H "Authorization: Bearer $VERCEL_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "{\"runtime\":\"node24\",\"projectId\":\"$VERCEL_PROJECT_ID\"}" | jq -r '.sandbox.id')
-
-curl -s -X POST "https://api.vercel.com/v1/sandboxes/$SANDBOX_ID/cmd?teamId=$VERCEL_TEAM_ID" \
-  -H "Authorization: Bearer $VERCEL_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"command":"npm","args":["install","-g","@anthropic-ai/claude-code"],"sudo":true,"wait":true}'
-
-SNAPSHOT_ID=$(curl -s -X POST "https://api.vercel.com/v1/sandboxes/$SANDBOX_ID/snapshot?teamId=$VERCEL_TEAM_ID" \
-  -H "Authorization: Bearer $VERCEL_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{}' | jq -r '.snapshot.id')
-
-echo "Snapshot: $SNAPSHOT_ID"
+npx sandbox create                                          # note the sandbox ID
+npx sandbox exec <SANDBOX_ID> -- npm install -g @anthropic-ai/claude-code
+npx sandbox snapshot <SANDBOX_ID> --stop                    # note the snapshot ID
 ```
 
 ### 2. Run the server
@@ -541,11 +533,10 @@ node server.js \
   --vercel-team-id "$VERCEL_TEAM_ID" \
   --vercel-project-id "$VERCEL_PROJECT_ID" \
   --vercel-snapshot-id "$SNAPSHOT_ID" \
-  --claude-token "$CLAUDE_CODE_OAUTH_TOKEN" \
   --concurrency 2
 ```
 
-The server creates sandboxes from the snapshot on startup and stops them on shutdown.
+The server creates sandboxes from the snapshot on startup and stops them on shutdown. Auth tokens flow per-request via `x-api-key`.
 
 ## Architecture
 
