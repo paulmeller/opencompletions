@@ -357,9 +357,14 @@ function drain() {
 function buildAuthEnv(clientToken) {
   // Start clean — only set the auth vars we intend, inheriting nothing
   const env = { ANTHROPIC_API_KEY: "", CLAUDE_CODE_OAUTH_TOKEN: "" };
-  const apiKey = clientToken || CONFIGURED_API_KEY;
-  if (apiKey) {
-    env.ANTHROPIC_API_KEY = apiKey;
+  const token = clientToken || CONFIGURED_API_KEY;
+  if (token) {
+    // OAuth tokens (sk-ant-oat*) must go to CLAUDE_CODE_OAUTH_TOKEN
+    if (token.startsWith("sk-ant-oat")) {
+      env.CLAUDE_CODE_OAUTH_TOKEN = token;
+    } else {
+      env.ANTHROPIC_API_KEY = token;
+    }
   } else if (CONFIGURED_OAUTH_TOKEN) {
     env.CLAUDE_CODE_OAUTH_TOKEN = CONFIGURED_OAUTH_TOKEN;
   }
