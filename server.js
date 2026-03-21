@@ -2140,6 +2140,30 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  if (publicUrl === "/docs" && req.method === "GET") {
+    res.writeHead(200, {
+      "Content-Type": "text/html",
+      "Access-Control-Allow-Origin": "*",
+    });
+    res.end(`<!DOCTYPE html>
+<html>
+<head>
+  <title>OpenCompletions API</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+</head>
+<body>
+  <div id="app"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+  <script>
+    Scalar.createApiReference('#app', { url: '/openapi.json' })
+  </script>
+</body>
+</html>`);
+    console.log(`${req.method} ${req.url} 200 ${Date.now() - start}ms`);
+    return;
+  }
+
   // Extract auth: Bearer token for server auth, x-api-key for backend forwarding
   const authHeader = req.headers.authorization || "";
   const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
@@ -2198,6 +2222,7 @@ const server = http.createServer(async (req, res) => {
           anthropic_count_tokens: "POST /v1/messages/count_tokens",
           agent: "POST /v1/agent",
           openapi_spec: "GET  /openapi.json",
+          docs: "GET  /docs",
           models: "GET  /v1/models",
           model_detail: "GET  /v1/models/:id",
         },
@@ -2476,6 +2501,7 @@ async function start() {
 ║    GET  /v1/models/:id            (Model detail)         ║
 ║    GET  /v1/status                (Queue status)         ║
 ║    GET  /openapi.json             (OpenAPI spec)         ║
+║    GET  /docs                    (API docs viewer)      ║
 ║    GET  /                         (Health check)         ║
 ║    * /v1/ prefix optional on all routes                  ║
 ║                                                          ║
