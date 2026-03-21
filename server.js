@@ -1941,6 +1941,24 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "OPTIONS") return sendJSON(204, {});
 
+  // Public routes (no auth required)
+  const publicUrl = req.url.split("?")[0];
+  if (publicUrl === "/openapi.json" && req.method === "GET") {
+    try {
+      const specPath = require("path").join(__dirname, "openapi.json");
+      const spec = require("fs").readFileSync(specPath, "utf-8");
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+      });
+      res.end(spec);
+      console.log(`${req.method} ${req.url} 200 ${Date.now() - start}ms`);
+      return;
+    } catch {
+      return sendJSON(404, { error: { message: "openapi.json not found", type: "not_found" } });
+    }
+  }
+
   // Extract bearer token from Authorization header or Anthropic x-api-key header
   const authHeader = req.headers.authorization || "";
   const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
@@ -2025,23 +2043,6 @@ const server = http.createServer(async (req, res) => {
         }));
       }
       return sendJSON(200, info);
-    }
-
-    // ----- OpenAPI spec -----
-    if (url === "/openapi.json" && req.method === "GET") {
-      try {
-        const specPath = require("path").join(__dirname, "openapi.json");
-        const spec = require("fs").readFileSync(specPath, "utf-8");
-        res.writeHead(200, {
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
-        });
-        res.end(spec);
-        console.log(`${req.method} ${req.url} 200 ${Date.now() - start}ms`);
-        return;
-      } catch {
-        return sendJSON(404, { error: { message: "openapi.json not found", type: "not_found" } });
-      }
     }
 
     // ----- OpenAI: GET /v1/models -----
