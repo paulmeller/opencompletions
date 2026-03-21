@@ -907,18 +907,23 @@ function buildSpriteAuthPrefix(clientToken) {
   return parts.join(" ");
 }
 
-function buildSpriteExecUrl(spriteName, systemPrompt, clientToken) {
-  const params = new URLSearchParams();
-  // Inline auth env vars before the wrapper command so they override ~/.claude-env
+function appendSpriteCmd(params, clientToken) {
   const authPrefix = buildSpriteAuthPrefix(clientToken);
   if (authPrefix) {
+    // Inline auth env vars and exec claude directly
     params.append("cmd", "bash");
     params.append("cmd", "-c");
-    params.append("cmd", `${authPrefix} exec /home/sprite/.claude-wrapper "$@"`);
+    params.append("cmd", `${authPrefix} exec claude "$@"`);
     params.append("cmd", "--");
   } else {
+    // Fall back to wrapper (sources ~/.claude-env for server-side auth)
     params.append("cmd", "/home/sprite/.claude-wrapper");
   }
+}
+
+function buildSpriteExecUrl(spriteName, systemPrompt, clientToken) {
+  const params = new URLSearchParams();
+  appendSpriteCmd(params, clientToken);
   params.append("cmd", "-p");
   params.append("cmd", "--max-turns");
   params.append("cmd", MAX_TURNS);
@@ -1043,15 +1048,7 @@ async function runClaudeSpriteStreaming(prompt, systemPrompt, onChunk, clientTok
 function buildSpriteAgentExecUrl(spriteName, opts) {
   const cliArgs = buildAgentCliArgs(opts);
   const params = new URLSearchParams();
-  const authPrefix = buildSpriteAuthPrefix(opts.clientToken);
-  if (authPrefix) {
-    params.append("cmd", "bash");
-    params.append("cmd", "-c");
-    params.append("cmd", `${authPrefix} exec /home/sprite/.claude-wrapper "$@"`);
-    params.append("cmd", "--");
-  } else {
-    params.append("cmd", "/home/sprite/.claude-wrapper");
-  }
+  appendSpriteCmd(params, opts.clientToken);
   for (const arg of cliArgs) {
     params.append("cmd", arg);
   }
@@ -1128,7 +1125,8 @@ async function runAgentOnSprite(prompt, opts, onEvent) {
         } catch {}
       }
     } else {
-      // Streamed text — parse NDJSON line by line
+      // Streamed binary — sprite exec uses framing bytes (0x01=stdout, 0x02=stderr, 0x03=exit)
+      // Strip framing before parsing NDJSON
       const reader = response.body.getReader();
       const decoder = new TextDecoder("utf-8", { fatal: false });
       let buffer = "";
@@ -1136,7 +1134,8 @@ async function runAgentOnSprite(prompt, opts, onEvent) {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+        const raw = decoder.decode(value, { stream: true });
+        buffer += raw.replace(CONTROL_CHARS, "");
         buffer = parseNDJSONLines(buffer, (event) => {
           trackSession(event);
           onEvent(sanitizeEvent(event));
