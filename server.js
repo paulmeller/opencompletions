@@ -898,7 +898,14 @@ async function initSprites() {
   console.log("Sprites ready.");
 }
 
-function buildSpriteExecUrl(spriteName, systemPrompt) {
+function appendSpriteAuthEnv(params, clientToken) {
+  const authEnv = buildAuthEnv(clientToken);
+  for (const [key, val] of Object.entries(authEnv)) {
+    if (val) params.append("env", `${key}=${val}`);
+  }
+}
+
+function buildSpriteExecUrl(spriteName, systemPrompt, clientToken) {
   const params = new URLSearchParams();
   params.append("cmd", "/home/sprite/.claude-wrapper");
   params.append("cmd", "-p");
@@ -911,19 +918,17 @@ function buildSpriteExecUrl(spriteName, systemPrompt) {
     params.append("cmd", systemPrompt);
   }
   params.append("stdin", "true");
+  appendSpriteAuthEnv(params, clientToken);
   return `${SPRITE_API}/v1/sprites/${encodeURIComponent(
     spriteName,
   )}/exec?${params.toString()}`;
 }
 
 async function runClaudeOnSprite(prompt, systemPrompt, clientToken) {
-  if (clientToken) {
-    console.warn("Warning: sprite backend does not support per-request tokens; using server token");
-  }
   const sprite = acquireSprite();
 
   try {
-    const url = buildSpriteExecUrl(sprite.name, systemPrompt);
+    const url = buildSpriteExecUrl(sprite.name, systemPrompt, clientToken);
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -967,13 +972,10 @@ async function runClaudeOnSprite(prompt, systemPrompt, clientToken) {
 }
 
 async function runClaudeSpriteStreaming(prompt, systemPrompt, onChunk, clientToken) {
-  if (clientToken) {
-    console.warn("Warning: sprite backend does not support per-request tokens; using server token");
-  }
   const sprite = acquireSprite();
 
   try {
-    const url = buildSpriteExecUrl(sprite.name, systemPrompt);
+    const url = buildSpriteExecUrl(sprite.name, systemPrompt, clientToken);
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -1036,13 +1038,11 @@ function buildSpriteAgentExecUrl(spriteName, opts) {
     params.append("cmd", arg);
   }
   params.append("stdin", "true");
+  appendSpriteAuthEnv(params, opts.clientToken);
   return `${SPRITE_API}/v1/sprites/${encodeURIComponent(spriteName)}/exec?${params.toString()}`;
 }
 
 async function runAgentOnSprite(prompt, opts, onEvent) {
-  if (opts.clientToken) {
-    console.warn("Warning: sprite backend does not support per-request tokens; using server token");
-  }
 
   // Session affinity: if resuming, try to use the same sprite
   let sprite;
