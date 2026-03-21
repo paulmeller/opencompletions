@@ -20,10 +20,10 @@
  *   node server.js
  *
  *   # Sprite mode (single sprite)
- *   node server.js --backend sprite --sprite-token $SPRITES_TOKEN --sprite-name my-sprite
+ *   node server.js --backend sprite --sprite-token $SPRITE_TOKEN --sprite-name my-sprite
  *
  *   # Sprite pool (multiple sprites as workers)
- *   node server.js --backend sprite --sprite-token $SPRITES_TOKEN \
+ *   node server.js --backend sprite --sprite-token $SPRITE_TOKEN \
  *     --sprite-name worker-1 --sprite-name worker-2 --sprite-name worker-3
  *
  *   # Vercel Sandbox mode
@@ -92,7 +92,7 @@ const CLAUDE_TOKEN = flag(
 );
 
 // Sprite config
-const SPRITE_TOKEN = flag("sprite-token", process.env.SPRITES_TOKEN || "");
+const SPRITE_TOKEN = flag("sprite-token", process.env.SPRITE_TOKEN || process.env.SPRITES_TOKEN || "");
 const SPRITE_NAMES = flagAll("sprite-name");
 const SPRITE_API = flag("sprite-api", "https://api.sprites.dev");
 
@@ -170,7 +170,7 @@ if (!API_KEY) {
 }
 if (BACKEND === "sprite" && !SPRITE_TOKEN) {
   console.error(
-    "Error: --sprite-token or SPRITES_TOKEN env var required for sprite backend",
+    "Error: --sprite-token or SPRITE_TOKEN env var required for sprite backend",
   );
   process.exit(1);
 }

@@ -27,7 +27,7 @@ node server.js
 ```bash
 node server.js \
   --backend sprite \
-  --sprite-token "$SPRITES_TOKEN" \
+  --sprite-token "$SPRITE_TOKEN" \
   --sprite-name my-claude-sprite \
   --claude-token "$CLAUDE_CODE_OAUTH_TOKEN"
 ```
@@ -69,7 +69,7 @@ All endpoints will require `Authorization: Bearer my-secret-key`.
 | `--api-key`         | `$API_KEY`                     | Bearer token for all endpoints           |
 | `--backend`         | local                          | `local`, `sprite`, or `vercel`           |
 | `--claude-token`    | `$CLAUDE_CODE_OAUTH_TOKEN`     | Claude Code OAuth token                  |
-| `--sprite-token`    | `$SPRITES_TOKEN`               | Sprites.dev auth token                   |
+| `--sprite-token`    | `$SPRITE_TOKEN`               | Sprites.dev auth token                   |
 | `--sprite-name`     | *(required for sprite mode)*   | Sprite name (repeat for pool)            |
 | `--sprite-api`      | `https://api.sprites.dev`      | Sprites API base URL                     |
 | `--vercel-token`    | `$VERCEL_TOKEN`                | Vercel API token                         |
@@ -409,7 +409,7 @@ docker build -t opencompletions .
 
 docker run -p 3456:3456 opencompletions \
   --backend sprite \
-  --sprite-token "$SPRITES_TOKEN" \
+  --sprite-token "$SPRITE_TOKEN" \
   --sprite-name my-sprite \
   --claude-token "$CLAUDE_CODE_OAUTH_TOKEN" \
   --api-key "$API_KEY"
@@ -429,7 +429,7 @@ container build -t opencompletions .
 # Run
 container run -p 3456:3456 opencompletions \
   --backend sprite \
-  --sprite-token "$SPRITES_TOKEN" \
+  --sprite-token "$SPRITE_TOKEN" \
   --sprite-name my-sprite \
   --claude-token "$CLAUDE_CODE_OAUTH_TOKEN" \
   --api-key "$API_KEY"
@@ -437,7 +437,7 @@ container run -p 3456:3456 opencompletions \
 # Run detached
 container run -d --name claude-api -p 3456:3456 opencompletions \
   --backend sprite \
-  --sprite-token "$SPRITES_TOKEN" \
+  --sprite-token "$SPRITE_TOKEN" \
   --sprite-name my-sprite \
   --claude-token "$CLAUDE_CODE_OAUTH_TOKEN" \
   --api-key "$API_KEY"
@@ -450,7 +450,7 @@ container stop claude-api
 You can also pass secrets via `--env-file`:
 
 ```bash
-echo 'SPRITES_TOKEN=...' > .env
+echo 'SPRITE_TOKEN=...' > .env
 echo 'CLAUDE_CODE_OAUTH_TOKEN=...' >> .env
 echo 'API_KEY=...' >> .env
 
@@ -490,7 +490,7 @@ done
 ```bash
 node server.js \
   --backend sprite \
-  --sprite-token "$SPRITES_TOKEN" \
+  --sprite-token "$SPRITE_TOKEN" \
   --sprite-name claude-worker-1 \
   --sprite-name claude-worker-2 \
   --sprite-name claude-worker-3 \
