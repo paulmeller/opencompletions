@@ -898,16 +898,27 @@ async function initSprites() {
   console.log("Sprites ready.");
 }
 
-function appendSpriteAuthEnv(params, clientToken) {
+function buildSpriteAuthPrefix(clientToken) {
   const authEnv = buildAuthEnv(clientToken);
+  const parts = [];
   for (const [key, val] of Object.entries(authEnv)) {
-    if (val) params.append("env", `${key}=${val}`);
+    if (val) parts.push(`${key}='${val.replace(/'/g, "'\\''")}'`);
   }
+  return parts.join(" ");
 }
 
 function buildSpriteExecUrl(spriteName, systemPrompt, clientToken) {
   const params = new URLSearchParams();
-  params.append("cmd", "/home/sprite/.claude-wrapper");
+  // Inline auth env vars before the wrapper command so they override ~/.claude-env
+  const authPrefix = buildSpriteAuthPrefix(clientToken);
+  if (authPrefix) {
+    params.append("cmd", "bash");
+    params.append("cmd", "-c");
+    params.append("cmd", `${authPrefix} exec /home/sprite/.claude-wrapper "$@"`);
+    params.append("cmd", "--");
+  } else {
+    params.append("cmd", "/home/sprite/.claude-wrapper");
+  }
   params.append("cmd", "-p");
   params.append("cmd", "--max-turns");
   params.append("cmd", MAX_TURNS);
@@ -918,7 +929,6 @@ function buildSpriteExecUrl(spriteName, systemPrompt, clientToken) {
     params.append("cmd", systemPrompt);
   }
   params.append("stdin", "true");
-  appendSpriteAuthEnv(params, clientToken);
   return `${SPRITE_API}/v1/sprites/${encodeURIComponent(
     spriteName,
   )}/exec?${params.toString()}`;
@@ -1033,12 +1043,19 @@ async function runClaudeSpriteStreaming(prompt, systemPrompt, onChunk, clientTok
 function buildSpriteAgentExecUrl(spriteName, opts) {
   const cliArgs = buildAgentCliArgs(opts);
   const params = new URLSearchParams();
-  params.append("cmd", "/home/sprite/.claude-wrapper");
+  const authPrefix = buildSpriteAuthPrefix(opts.clientToken);
+  if (authPrefix) {
+    params.append("cmd", "bash");
+    params.append("cmd", "-c");
+    params.append("cmd", `${authPrefix} exec /home/sprite/.claude-wrapper "$@"`);
+    params.append("cmd", "--");
+  } else {
+    params.append("cmd", "/home/sprite/.claude-wrapper");
+  }
   for (const arg of cliArgs) {
     params.append("cmd", arg);
   }
   params.append("stdin", "true");
-  appendSpriteAuthEnv(params, opts.clientToken);
   return `${SPRITE_API}/v1/sprites/${encodeURIComponent(spriteName)}/exec?${params.toString()}`;
 }
 
