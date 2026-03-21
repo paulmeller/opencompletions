@@ -86,7 +86,11 @@ const MODEL_NAME = "claude-code";
 // Backend config
 const BACKEND = flag("backend", "local"); // "local", "sprite", or "vercel"
 const CLI_NAME = flag("cli", "claude"); // "claude" or "opencode"
-const CLAUDE_TOKEN = flag(
+const ANTHROPIC_API_KEY_CFG = flag(
+  "anthropic-api-key",
+  process.env.ANTHROPIC_API_KEY || "",
+);
+const CLAUDE_OAUTH_TOKEN_CFG = flag(
   "claude-token",
   process.env.CLAUDE_CODE_OAUTH_TOKEN || "",
 );
@@ -203,11 +207,10 @@ if (CLI_NAME === "opencode" && BACKEND !== "local") {
   console.error("Error: --cli opencode only supports --backend local");
   process.exit(1);
 }
-if (CLI_NAME === "opencode" && CLAUDE_TOKEN && (CLAUDE_TOKEN.startsWith("sk-ant-oat") || (!CLAUDE_TOKEN.startsWith("sk-ant-api") && CLAUDE_TOKEN.startsWith("sk-ant-")))) {
+if (CLI_NAME === "opencode" && CLAUDE_OAUTH_TOKEN_CFG && !ANTHROPIC_API_KEY_CFG) {
   console.warn(
-    "WARNING: --claude-token appears to be an Anthropic OAuth token. " +
-    "OAuth tokens must not be used with opencode per Anthropic Terms of Service. " +
-    "Use an API key (sk-ant-api*) or configure opencode's own auth instead.",
+    "WARNING: CLAUDE_CODE_OAUTH_TOKEN is set but cannot be used with opencode per Anthropic ToS. " +
+    "Set ANTHROPIC_API_KEY or use --anthropic-api-key instead.",
   );
 }
 
@@ -351,15 +354,14 @@ function drain() {
 // ---------------------------------------------------------------------------
 function buildAuthEnv(clientToken) {
   const env = {};
-  const token = clientToken || CLAUDE_TOKEN;
-  if (token) {
-    if (token.startsWith("sk-ant-api")) {
-      env.ANTHROPIC_API_KEY = token;
-      env.CLAUDE_CODE_OAUTH_TOKEN = ""; // clear to avoid ambiguity
-    } else {
-      env.CLAUDE_CODE_OAUTH_TOKEN = token;
-      env.ANTHROPIC_API_KEY = ""; // clear to avoid ambiguity
-    }
+  // Per-request Anthropic API key takes priority
+  const apiKey = clientToken || ANTHROPIC_API_KEY_CFG;
+  if (apiKey) {
+    env.ANTHROPIC_API_KEY = apiKey;
+    env.CLAUDE_CODE_OAUTH_TOKEN = ""; // clear to avoid ambiguity
+  } else if (CLAUDE_OAUTH_TOKEN_CFG) {
+    env.CLAUDE_CODE_OAUTH_TOKEN = CLAUDE_OAUTH_TOKEN_CFG;
+    env.ANTHROPIC_API_KEY = ""; // clear to avoid ambiguity
   }
   return env;
 }
@@ -524,17 +526,13 @@ const opencodeProvider = {
   },
   buildAuthEnv(clientToken) {
     const env = {};
-    const token = clientToken || CLAUDE_TOKEN;
-    if (!token) return env;
-    // Only forward Anthropic API keys — never OAuth tokens (sk-ant-oat*)
-    if (token.startsWith("sk-ant-api")) {
-      env.ANTHROPIC_API_KEY = token;
-    } else if (token.startsWith("sk-ant-oat") || token.startsWith("sk-ant-")) {
-      // Anthropic OAuth tokens must not be used with opencode per ToS
-      console.warn("Warning: Anthropic OAuth token ignored — not supported with opencode");
-    } else {
-      // Non-Anthropic key (e.g. OpenAI, Google) — pass through as-is
-      env.ANTHROPIC_API_KEY = token;
+    const apiKey = clientToken || ANTHROPIC_API_KEY_CFG;
+    if (apiKey) {
+      env.ANTHROPIC_API_KEY = apiKey;
+    }
+    // Never forward OAuth tokens to opencode per Anthropic ToS
+    if (CLAUDE_OAUTH_TOKEN_CFG && !apiKey) {
+      console.warn("Warning: Claude OAuth token cannot be used with opencode — set ANTHROPIC_API_KEY instead");
     }
     return env;
   },
