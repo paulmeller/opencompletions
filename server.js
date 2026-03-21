@@ -833,9 +833,14 @@ async function initSpriteSetup(spriteName) {
     'exec claude "$@"',
   ].join("\n");
 
-  const body = CLAUDE_TOKEN
-    ? `CLAUDE_CODE_OAUTH_TOKEN='${CLAUDE_TOKEN.replace(/'/g, "'\\''")}'`
-    : "";
+  const envLines = [];
+  if (ANTHROPIC_API_KEY_CFG) {
+    envLines.push(`ANTHROPIC_API_KEY='${ANTHROPIC_API_KEY_CFG.replace(/'/g, "'\\''")}'`);
+  }
+  if (CLAUDE_OAUTH_TOKEN_CFG) {
+    envLines.push(`CLAUDE_CODE_OAUTH_TOKEN='${CLAUDE_OAUTH_TOKEN_CFG.replace(/'/g, "'\\''")}'`);
+  }
+  const body = envLines.join("\n");
 
   const params = new URLSearchParams();
   params.append("cmd", "bash");
