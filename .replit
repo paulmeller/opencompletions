@@ -38,5 +38,5 @@ outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "node server.js --port 3000"
+args = "node server.js --backend sprite --sprite-token \"$SPRITES_TOKEN\" --sprite-name \"$SPRITE_NAME\" --claude-token \"$CLAUDE_CODE_OAUTH_TOKEN\" --api-key \"$API_KEY\" --port 3000"
 waitForPort = 3000
