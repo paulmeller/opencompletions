@@ -4,7 +4,7 @@ entrypoint = "server.js"
 modules = ["nodejs-20"]
 
 [deployment]
-run = ["node", "server.js", "--port", "3000"]
+run = ["sh", "-c", "node server.js --backend sprite --sprite-token \"$SPRITES_TOKEN\" --sprite-name \"$SPRITE_NAME\" --claude-token \"$CLAUDE_CODE_OAUTH_TOKEN\" --api-key \"$API_KEY\" --port 3000"]
 deploymentTarget = "autoscale"
 
 [env]
