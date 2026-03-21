@@ -43,6 +43,12 @@ node server.js \
   --claude-token "$CLAUDE_CODE_OAUTH_TOKEN"
 ```
 
+### OpenCode mode
+
+```bash
+node server.js --cli opencode --api-key mysecret
+```
+
 ### With authentication
 
 ```bash
@@ -55,6 +61,7 @@ All endpoints will require `Authorization: Bearer my-secret-key`.
 
 | Flag                | Default                        | Description                              |
 |---------------------|--------------------------------|------------------------------------------|
+| `--cli`             | `claude`                       | CLI backend: `claude` or `opencode`      |
 | `--port`            | 3456                           | Port to listen on                        |
 | `--concurrency`     | 3                              | Max simultaneous requests                |
 | `--timeout`         | 120000                         | Per-request timeout in ms                |
@@ -72,6 +79,19 @@ All endpoints will require `Authorization: Bearer my-secret-key`.
 | `--agent-max-turns`  | 10                             | Default max turns for agent requests     |
 | `--agent-timeout`    | 600000                         | Agent timeout in ms (default 10 min)     |
 | `--agent-mcp-config` | *(none)*                       | Operator-default MCP config JSON         |
+
+## OpenCode Mode
+
+The `--cli opencode` flag switches the CLI backend from Claude Code to [OpenCode](https://github.com/anomalyco/opencode), a provider-agnostic AI coding agent that supports Anthropic, OpenAI, Google, Groq, and more.
+
+**Requirements:**
+- OpenCode only works with `--backend local`. The sprite and vercel backends are Claude-only.
+
+**Behavioral differences when using `--cli opencode`:**
+- **Unsupported agent features** — `allowed_tools`, `disallowed_tools`, `max_budget_usd`, and `mcp_servers` return `400` errors.
+- **`max_turns`** — Logged as a warning but allowed (OpenCode does not support it natively).
+- **System prompts** — Prepended to the user prompt, since OpenCode has no `--system-prompt` flag.
+- **Session resume** — Uses OpenCode's `--session` flag (equivalent to Claude's `--resume`).
 
 ## Endpoints
 
@@ -566,3 +586,4 @@ The server creates sandboxes from the snapshot on startup and stops them on shut
 - **Local mode:** ~200-500ms process spawn overhead per request
 - **Sprite mode:** additional network latency; sprites may need to wake from cold sleep (~5-15s) on first request
 - **Vercel mode:** sandboxes have a 5-minute default timeout; the server auto-replaces dead sandboxes
+- **OpenCode mode:** local backend only; no support for `allowed_tools`, `disallowed_tools`, `max_budget_usd`, or `mcp_servers`; `max_turns` is accepted but not enforced

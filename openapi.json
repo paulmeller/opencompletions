@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "OpenCompletions API",
-    "description": "A lightweight server wrapping Claude Code CLI as a completions and agent API, with OpenAI-compatible, Anthropic-compatible, and multi-turn Agent endpoints.",
+    "description": "A lightweight server wrapping Claude Code CLI as a completions and agent API, with OpenAI-compatible, Anthropic-compatible, and multi-turn Agent endpoints. Supports multiple CLI backends via the `--cli claude|opencode` flag (default: `claude`).",
     "version": "1.0.0",
     "license": {
       "name": "MIT"
@@ -356,7 +356,7 @@
       "post": {
         "operationId": "createAgentRun",
         "summary": "Run a multi-turn agent with tool use",
-        "description": "Starts an autonomous agent that can use tools (Read, Edit, Bash, etc.) across multiple turns. Streams Claude Code's NDJSON events as SSE by default. Supports session resumption, tool restrictions, MCP servers, and budget caps.",
+        "description": "Starts an autonomous agent that can use tools (Read, Edit, Bash, etc.) across multiple turns. Streams Claude Code's NDJSON events as SSE by default. Supports session resumption, tool restrictions, MCP servers, and budget caps. Note: when the server is started with `--cli opencode`, the fields `allowed_tools`, `disallowed_tools`, `max_budget_usd`, and `mcp_servers` are not supported and will return 400 errors if provided.",
         "tags": ["Agent"],
         "requestBody": {
           "required": true,
@@ -986,6 +986,7 @@
           "name": { "type": "string", "example": "opencompletions" },
           "status": { "type": "string", "enum": ["ok"] },
           "backend": { "type": "string", "enum": ["local", "sprite", "vercel"] },
+          "cli": { "type": "string", "enum": ["claude", "opencode"], "description": "The CLI backend in use, set via the --cli flag" },
           "active_workers": { "type": "integer" },
           "queued": { "type": "integer" },
           "max_concurrency": { "type": "integer" },

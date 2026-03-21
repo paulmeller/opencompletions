@@ -3,13 +3,17 @@
 /**
  * OpenCompletions Server
  *
- * Wraps `claude -p` as a local completions API with OpenAI-compatible,
+ * Wraps CLI coding agents as a local completions API with OpenAI-compatible,
  * Anthropic-compatible, and multi-turn Agent endpoints.
  *
+ * Supports two CLI backends (--cli flag):
+ *   - claude:   Claude Code CLI (default)
+ *   - opencode: OpenCode CLI (provider-agnostic, local backend only)
+ *
  * Supports three execution backends:
- *   - local:  spawns `claude -p` as a subprocess (default)
- *   - sprite: delegates to a Sprites.dev VM via REST API
- *   - vercel: delegates to a Vercel Sandbox via REST API
+ *   - local:  spawns the CLI as a subprocess (default)
+ *   - sprite: delegates to a Sprites.dev VM via REST API (claude only)
+ *   - vercel: delegates to a Vercel Sandbox via REST API (claude only)
  *
  * Usage:
  *   # Local mode
@@ -25,6 +29,9 @@
  *   # Vercel Sandbox mode
  *   node server.js --backend vercel --vercel-token $VERCEL_TOKEN \
  *     --vercel-team-id $TEAM_ID --vercel-snapshot-id $SNAP_ID
+ *
+ *   # OpenCode mode (provider-agnostic)
+ *   node server.js --cli opencode
  *
  *   # Other options
  *   node server.js --port 3456 --concurrency 3 --timeout 120000 --api-key mysecret
@@ -78,6 +85,7 @@ const MODEL_NAME = "claude-code";
 
 // Backend config
 const BACKEND = flag("backend", "local"); // "local", "sprite", or "vercel"
+const CLI_NAME = flag("cli", "claude"); // "claude" or "opencode"
 const CLAUDE_TOKEN = flag(
   "claude-token",
   process.env.CLAUDE_CODE_OAUTH_TOKEN || "",
@@ -183,6 +191,24 @@ if (BACKEND === "vercel" && !VERCEL_TEAM_ID) {
     "Error: --vercel-team-id or VERCEL_TEAM_ID env var required for vercel backend",
   );
   process.exit(1);
+}
+const VALID_CLIS = ["claude", "opencode"];
+if (!VALID_CLIS.includes(CLI_NAME)) {
+  console.error(
+    `Error: --cli must be one of: ${VALID_CLIS.join(", ")} (got "${CLI_NAME}")`,
+  );
+  process.exit(1);
+}
+if (CLI_NAME === "opencode" && BACKEND !== "local") {
+  console.error("Error: --cli opencode only supports --backend local");
+  process.exit(1);
+}
+if (CLI_NAME === "opencode" && CLAUDE_TOKEN && (CLAUDE_TOKEN.startsWith("sk-ant-oat") || (!CLAUDE_TOKEN.startsWith("sk-ant-api") && CLAUDE_TOKEN.startsWith("sk-ant-")))) {
+  console.warn(
+    "WARNING: --claude-token appears to be an Anthropic OAuth token. " +
+    "OAuth tokens must not be used with opencode per Anthropic Terms of Service. " +
+    "Use an API key (sk-ant-api*) or configure opencode's own auth instead.",
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -454,19 +480,160 @@ function parseNDJSONLines(buffer, onLine) {
 }
 
 // ---------------------------------------------------------------------------
+// CLI Providers
+// ---------------------------------------------------------------------------
+const claudeProvider = {
+  name: "claude",
+  command: "claude",
+  promptViaStdin: true,
+  buildCompletionArgs(systemPrompt) {
+    const args = ["-p", "--max-turns", MAX_TURNS, "--output-format", "text"];
+    if (systemPrompt) args.push("--system-prompt", systemPrompt);
+    return args;
+  },
+  buildAgentArgs(opts) {
+    return buildAgentCliArgs(opts);
+  },
+  buildAuthEnv: buildAuthEnv,
+  wrapPrompt(prompt) {
+    return prompt;
+  },
+  createEventTranslator() {
+    return (event) => sanitizeEvent(event);
+  },
+  errorLabel: "claude",
+};
+
+const opencodeProvider = {
+  name: "opencode",
+  command: "opencode",
+  promptViaStdin: false,
+  buildCompletionArgs() {
+    return ["run"];
+  },
+  buildAgentArgs(opts) {
+    const args = ["run", "--format", "json"];
+    if (opts.sessionId) args.push("--session", opts.sessionId);
+    if (opts.model) args.push("--model", opts.model);
+    if (opts.maxTurns && opts.maxTurns !== AGENT_MAX_TURNS) {
+      console.warn(
+        `Warning: opencode does not support max_turns (requested ${opts.maxTurns}, ignored)`,
+      );
+    }
+    return args;
+  },
+  buildAuthEnv(clientToken) {
+    const env = {};
+    const token = clientToken || CLAUDE_TOKEN;
+    if (!token) return env;
+    // Only forward Anthropic API keys — never OAuth tokens (sk-ant-oat*)
+    if (token.startsWith("sk-ant-api")) {
+      env.ANTHROPIC_API_KEY = token;
+    } else if (token.startsWith("sk-ant-oat") || token.startsWith("sk-ant-")) {
+      // Anthropic OAuth tokens must not be used with opencode per ToS
+      console.warn("Warning: Anthropic OAuth token ignored — not supported with opencode");
+    } else {
+      // Non-Anthropic key (e.g. OpenAI, Google) — pass through as-is
+      env.ANTHROPIC_API_KEY = token;
+    }
+    return env;
+  },
+  wrapPrompt(prompt, systemPrompt) {
+    if (!systemPrompt) return prompt;
+    return `Instructions: ${systemPrompt}\n\n---\n\n${prompt}`;
+  },
+  createEventTranslator() {
+    let seenFirstStep = false;
+    let sessionId = null;
+    let totalCost = 0;
+    let totalTokens = { input: 0, output: 0 };
+    let stepCount = 0;
+    let lastText = "";
+
+    return (event) => {
+      if (!event || typeof event !== "object") return null;
+      sessionId = event.sessionID || sessionId;
+
+      switch (event.type) {
+        case "step_start": {
+          stepCount++;
+          if (!seenFirstStep) {
+            seenFirstStep = true;
+            return {
+              type: "system",
+              subtype: "init",
+              session_id: sessionId,
+              tools: [],
+              mcp_servers: [],
+            };
+          }
+          return null;
+        }
+        case "text": {
+          const text = event.part?.text || "";
+          if (text) lastText = text;
+          return {
+            type: "assistant",
+            message: { content: [{ type: "text", text }] },
+          };
+        }
+        case "tool_use": {
+          const part = event.part || {};
+          return {
+            type: "assistant",
+            message: {
+              content: [{
+                type: "tool_use",
+                id: part.callID || part.id,
+                name: part.tool || "unknown",
+                input: part.state?.input || {},
+              }],
+            },
+          };
+        }
+        case "step_finish": {
+          const part = event.part || {};
+          totalCost += part.cost || 0;
+          if (part.tokens) {
+            totalTokens.input += part.tokens.input || 0;
+            totalTokens.output += part.tokens.output || 0;
+          }
+          if (part.reason === "stop") {
+            return {
+              type: "result",
+              session_id: sessionId,
+              total_cost_usd: totalCost,
+              num_turns: stepCount,
+              result: lastText,
+              usage: {
+                input_tokens: totalTokens.input,
+                output_tokens: totalTokens.output,
+              },
+            };
+          }
+          return null; // tool-calls step_finish — accumulate cost only
+        }
+        default:
+          return null;
+      }
+    };
+  },
+  errorLabel: "opencode",
+};
+
+const CLI = CLI_NAME === "opencode" ? opencodeProvider : claudeProvider;
+
+// ---------------------------------------------------------------------------
 // Backend: Local subprocess
 // ---------------------------------------------------------------------------
 function runClaudeLocal(prompt, systemPrompt, clientToken) {
   return new Promise((resolve, reject) => {
-    const cliArgs = ["-p", "--max-turns", MAX_TURNS, "--output-format", "text"];
+    const cliArgs = CLI.buildCompletionArgs(systemPrompt);
+    if (!CLI.promptViaStdin) cliArgs.push(CLI.wrapPrompt(prompt, systemPrompt));
 
-    if (systemPrompt) {
-      cliArgs.push("--system-prompt", systemPrompt);
-    }
+    const env = { ...process.env, ...CLI.buildAuthEnv(clientToken) };
 
-    const env = { ...process.env, ...buildAuthEnv(clientToken) };
-
-    const proc = spawn("claude", cliArgs, {
+    const proc = spawn(CLI.command, cliArgs, {
       stdio: ["pipe", "pipe", "pipe"],
       env,
     });
@@ -498,7 +665,7 @@ function runClaudeLocal(prompt, systemPrompt, clientToken) {
       if (code === 0) {
         resolve(cleanOutput(stdout));
       } else {
-        reject(new Error(stderr || `claude exited with code ${code}`));
+        reject(new Error(stderr || `${CLI.errorLabel} exited with code ${code}`));
       }
     });
 
@@ -510,19 +677,19 @@ function runClaudeLocal(prompt, systemPrompt, clientToken) {
       reject(err);
     });
 
-    proc.stdin.write(prompt);
+    if (CLI.promptViaStdin) proc.stdin.write(prompt);
     proc.stdin.end();
   });
 }
 
 function runClaudeLocalStreaming(prompt, systemPrompt, onChunk, clientToken) {
   return new Promise((resolve, reject) => {
-    const cliArgs = ["-p", "--max-turns", MAX_TURNS, "--output-format", "text"];
-    if (systemPrompt) cliArgs.push("--system-prompt", systemPrompt);
+    const cliArgs = CLI.buildCompletionArgs(systemPrompt);
+    if (!CLI.promptViaStdin) cliArgs.push(CLI.wrapPrompt(prompt, systemPrompt));
 
-    const env = { ...process.env, ...buildAuthEnv(clientToken) };
+    const env = { ...process.env, ...CLI.buildAuthEnv(clientToken) };
 
-    const proc = spawn("claude", cliArgs, {
+    const proc = spawn(CLI.command, cliArgs, {
       stdio: ["pipe", "pipe", "pipe"],
       env,
     });
@@ -553,7 +720,7 @@ function runClaudeLocalStreaming(prompt, systemPrompt, onChunk, clientToken) {
       if (settled) return;
       settled = true;
       if (code === 0) resolve();
-      else reject(new Error(stderr || `claude exited with code ${code}`));
+      else reject(new Error(stderr || `${CLI.errorLabel} exited with code ${code}`));
     });
 
     proc.on("error", (err) => {
@@ -564,7 +731,7 @@ function runClaudeLocalStreaming(prompt, systemPrompt, onChunk, clientToken) {
       reject(err);
     });
 
-    proc.stdin.write(prompt);
+    if (CLI.promptViaStdin) proc.stdin.write(prompt);
     proc.stdin.end();
   });
 }
@@ -574,12 +741,13 @@ function runClaudeLocalStreaming(prompt, systemPrompt, onChunk, clientToken) {
 // ---------------------------------------------------------------------------
 function runAgentLocal(prompt, opts, onEvent) {
   return new Promise((resolve, reject) => {
-    const cliArgs = buildAgentCliArgs(opts);
-    const env = { ...process.env, ...buildAuthEnv(opts.clientToken) };
+    const cliArgs = CLI.buildAgentArgs(opts);
+    if (!CLI.promptViaStdin) cliArgs.push(CLI.wrapPrompt(prompt, opts.systemPrompt));
+    const env = { ...process.env, ...CLI.buildAuthEnv(opts.clientToken) };
     const spawnOpts = { stdio: ["pipe", "pipe", "pipe"], env };
     if (opts.cwd) spawnOpts.cwd = opts.cwd;
 
-    const proc = spawn("claude", cliArgs, spawnOpts);
+    const proc = spawn(CLI.command, cliArgs, spawnOpts);
     activeProcesses.add(proc);
 
     let settled = false;
@@ -612,10 +780,12 @@ function runAgentLocal(prompt, opts, onEvent) {
       opts.abortSignal.addEventListener("abort", onAbort, { once: true });
     }
 
+    const translate = CLI.createEventTranslator();
     proc.stdout.on("data", (chunk) => {
       buffer += chunk.toString();
       buffer = parseNDJSONLines(buffer, (event) => {
-        onEvent(sanitizeEvent(event));
+        const translated = translate(event);
+        if (translated) onEvent(translated);
       });
     });
 
@@ -629,13 +799,14 @@ function runAgentLocal(prompt, opts, onEvent) {
       // Flush remaining buffer
       if (buffer.trim()) {
         try {
-          onEvent(sanitizeEvent(JSON.parse(buffer.trim())));
+          const translated = translate(JSON.parse(buffer.trim()));
+          if (translated) onEvent(translated);
         } catch {}
       }
       if (settled) return;
       settled = true;
       if (code === 0) resolve();
-      else reject(new Error(stderr || `claude agent exited with code ${code}`));
+      else reject(new Error(stderr || `${CLI.errorLabel} agent exited with code ${code}`));
     });
 
     proc.on("error", (err) => {
@@ -646,7 +817,7 @@ function runAgentLocal(prompt, opts, onEvent) {
       reject(err);
     });
 
-    proc.stdin.write(prompt);
+    if (CLI.promptViaStdin) proc.stdin.write(prompt);
     proc.stdin.end();
   });
 }
@@ -2013,6 +2184,7 @@ const server = http.createServer(async (req, res) => {
       const info = {
         name: "opencompletions",
         status: "ok",
+        cli: CLI.name,
         backend: BACKEND,
         active_workers: activeWorkers,
         queued: queue.length,
@@ -2209,6 +2381,18 @@ const server = http.createServer(async (req, res) => {
         return sendJSON(err.status, err.body);
       }
 
+      // Validate unsupported features for non-claude CLIs
+      if (CLI.name === "opencode") {
+        if (body.allowed_tools?.length)
+          return sendJSON(400, { error: { message: "opencode backend does not support allowed_tools", type: "invalid_request_error" } });
+        if (body.disallowed_tools?.length)
+          return sendJSON(400, { error: { message: "opencode backend does not support disallowed_tools", type: "invalid_request_error" } });
+        if (body.max_budget_usd != null)
+          return sendJSON(400, { error: { message: "opencode backend does not support max_budget_usd", type: "invalid_request_error" } });
+        if (body.mcp_servers && Object.keys(body.mcp_servers).length)
+          return sendJSON(400, { error: { message: "opencode backend does not support per-request MCP config", type: "invalid_request_error" } });
+      }
+
       const agentOpts = {
         sessionId: body.session_id || null,
         maxTurns: body.max_turns || AGENT_MAX_TURNS,
@@ -2275,6 +2459,7 @@ async function start() {
 ╠══════════════════════════════════════════════════════════╣
 ║                                                          ║
 ║  Listening on http://localhost:${String(PORT).padEnd(26)}║
+║  CLI:         ${CLI.name.padEnd(43)}║
 ║  Backend:     ${backendInfo.slice(0, 43).padEnd(43)}║
 ║  Concurrency: ${String(MAX_CONCURRENCY).padEnd(43)}║
 ║  Timeout:     ${String(TIMEOUT_MS + "ms").padEnd(43)}║
