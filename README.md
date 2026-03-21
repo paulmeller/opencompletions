@@ -1,6 +1,6 @@
 # OpenCompletions
 
-A lightweight, zero-dependency server that wraps `claude -p --max-turns 1` as a local completions API, exposing both OpenAI-compatible and Anthropic-compatible endpoints with SSE streaming support.
+A lightweight, zero-dependency server that wraps `claude -p` as a local completions API, exposing OpenAI-compatible, Anthropic-compatible, and multi-turn Agent endpoints with SSE streaming support.
 
 Supports three backends:
 - **Local** — spawns `claude` as a subprocess on your machine
@@ -69,6 +69,9 @@ All endpoints will require `Authorization: Bearer my-secret-key`.
 | `--vercel-team-id`  | `$VERCEL_TEAM_ID`              | Vercel team ID                           |
 | `--vercel-project-id`| `$VERCEL_PROJECT_ID`          | Vercel project ID                        |
 | `--vercel-snapshot-id`| *(required for vercel mode)*  | Snapshot with Claude Code installed      |
+| `--agent-max-turns`  | 10                             | Default max turns for agent requests     |
+| `--agent-timeout`    | 600000                         | Agent timeout in ms (default 10 min)     |
+| `--agent-mcp-config` | *(none)*                       | Operator-default MCP config JSON         |
 
 ## Endpoints
 
@@ -114,12 +117,52 @@ curl http://localhost:3456/v1/completions \
   }'
 ```
 
+**POST /v1/completions (fill-in-the-middle)**
+
+```bash
+curl http://localhost:3456/v1/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" \
+  -d '{
+    "model": "claude-code",
+    "prompt": "function add(a, b) {",
+    "suffix": "}\nconsole.log(add(1, 2));"
+  }'
+```
+
+**POST /v1/responses** (OpenAI Responses API)
+
+```bash
+curl http://localhost:3456/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" \
+  -d '{
+    "model": "claude-code",
+    "input": "What is 2+2?",
+    "instructions": "Be concise."
+  }'
+```
+
+**POST /v1/embeddings** (stub — hash-based, not semantic)
+
+```bash
+curl http://localhost:3456/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" \
+  -d '{
+    "model": "claude-code",
+    "input": "Hello world"
+  }'
+```
+
 **GET /v1/models**
 
 ```bash
 curl http://localhost:3456/v1/models \
   -H "Authorization: Bearer $API_KEY"
 ```
+
+> All `/v1/` routes also work without the prefix (e.g., `/chat/completions`, `/embeddings`).
 
 ### Anthropic-Compatible
 
@@ -168,12 +211,91 @@ curl http://localhost:3456/v1/messages/count_tokens \
   }'
 ```
 
+### Agent API
+
+**POST /v1/agent** — Multi-turn agent with tool use (streaming by default)
+
+```bash
+curl -N http://localhost:3456/v1/agent \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" \
+  -d '{
+    "prompt": "Read server.js and list all HTTP endpoints",
+    "max_turns": 5,
+    "allowed_tools": ["Read", "Glob", "Grep"]
+  }'
+```
+
+Response is SSE with events: `system` (init), `assistant`, `user` (tool results), `result`, `done`.
+
+**Session resume:**
+
+```bash
+curl -N http://localhost:3456/v1/agent \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" \
+  -d '{
+    "prompt": "Now refactor the auth middleware",
+    "session_id": "<session_id from previous response>"
+  }'
+```
+
+**Non-streaming:**
+
+```bash
+curl http://localhost:3456/v1/agent \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" \
+  -d '{
+    "prompt": "What files are in this directory?",
+    "stream": false,
+    "max_turns": 3
+  }'
+```
+
+**With MCP servers:**
+
+```bash
+curl -N http://localhost:3456/v1/agent \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" \
+  -d '{
+    "prompt": "Check recent Sentry errors for the auth service",
+    "mcp_servers": {
+      "sentry": {
+        "type": "http",
+        "url": "https://mcp.sentry.dev/mcp",
+        "headers": { "Authorization": "Bearer sentry-token" }
+      }
+    }
+  }'
+```
+
+**Request fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `prompt` | string | *(required)* | The task for the agent |
+| `system_prompt` | string | null | System prompt |
+| `session_id` | string | null | Resume a previous session |
+| `max_turns` | number | 10 | Max agent turns |
+| `max_budget_usd` | number | null | Cost cap in USD |
+| `allowed_tools` | string[] | null | Whitelist of tools |
+| `disallowed_tools` | string[] | null | Blacklist of tools |
+| `model` | string | null | Override model |
+| `cwd` | string | null | Working directory (local backend) |
+| `stream` | boolean | true | SSE streaming vs buffered JSON |
+| `include_partial_messages` | boolean | false | Include partial message events |
+| `mcp_servers` | object | null | Per-request MCP server config |
+| `timeout_ms` | number | 600000 | Per-request timeout override |
+
 ### Utility
 
-| Endpoint        | Description                    |
-|-----------------|--------------------------------|
-| `GET /`         | Health check + server info     |
-| `GET /v1/status`| Queue depth + worker status    |
+| Endpoint           | Description                    |
+|--------------------|--------------------------------|
+| `GET /`            | Health check + server info     |
+| `GET /openapi.json`| OpenAPI 3.1 specification      |
+| `GET /v1/status`   | Queue depth + worker status    |
 
 ## Using with SDKs
 
@@ -210,6 +332,47 @@ response = client.messages.create(
     messages=[{"role": "user", "content": "Hello!"}],
 )
 print(response.content[0].text)
+```
+
+### Agent API (Python)
+
+```python
+import requests
+import json
+
+url = "http://localhost:3456/v1/agent"
+headers = {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer my-secret-key",
+}
+
+# Streaming
+response = requests.post(url, headers=headers, json={
+    "prompt": "Read server.js and list all endpoints",
+    "max_turns": 5,
+    "allowed_tools": ["Read", "Glob", "Grep"],
+}, stream=True)
+
+for line in response.iter_lines():
+    line = line.decode()
+    if line.startswith("data: "):
+        data = line[6:]
+        if data == "[DONE]":
+            break
+        event = json.loads(data)
+        print(f"[{event['type']}]", end=" ")
+        if event["type"] == "result":
+            print(event["result"])
+
+# Non-streaming
+response = requests.post(url, headers=headers, json={
+    "prompt": "What files are here?",
+    "stream": False,
+    "max_turns": 3,
+})
+data = response.json()
+print(data["result"])
+print(f"Cost: ${data['total_cost_usd']:.4f}, Turns: {data['num_turns']}")
 ```
 
 ### Any OpenAI-compatible tool
@@ -389,12 +552,15 @@ The server creates sandboxes from the snapshot on startup and stops them on shut
      │ / Vercel       │ │ / Vercel      │ │ / Vercel      │
      │ claude -p      │ │ claude -p     │ │ claude -p     │
      │ --max-turns 1  │ │ --max-turns 1 │ │ --max-turns 1 │
+     │ (completions)  │ │ (completions) │ │ (completions) │
+     │ --max-turns N  │ │ --max-turns N │ │ --max-turns N │
+     │ (agent)        │ │ (agent)       │ │ (agent)       │
      └───────────────┘ └──────────────┘ └──────────────┘
 ```
 
 ## Limitations
 
-- **Single turn only** — multi-turn conversations are flattened into a single prompt string. Prior assistant responses lose their role context. Works well for single-turn use but degrades with long conversations.
+- **Completions endpoints are single turn only** — multi-turn conversations are flattened into a single prompt string. Prior assistant responses lose their role context. Works well for single-turn use but degrades with long conversations. Use the Agent API (`POST /v1/agent`) for multi-turn interactions with tool use.
 - **No token counting** — usage fields are always 0
 - **Streaming granularity** — Sprite backend may deliver the full response as a single SSE chunk (HTTP POST buffering). Vercel and local backends stream incrementally.
 - **Local mode:** ~200-500ms process spawn overhead per request

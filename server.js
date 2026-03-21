@@ -3,8 +3,8 @@
 /**
  * OpenCompletions Server
  *
- * Wraps `claude -p --max-turns 1` as a local completions API
- * with both OpenAI-compatible and Anthropic-compatible endpoints.
+ * Wraps `claude -p` as a local completions API with OpenAI-compatible,
+ * Anthropic-compatible, and multi-turn Agent endpoints.
  *
  * Supports three execution backends:
  *   - local:  spawns `claude -p` as a subprocess (default)
@@ -32,7 +32,7 @@
 
 const http = require("http");
 const { spawn } = require("child_process");
-const { randomUUID, timingSafeEqual } = require("crypto");
+const { randomUUID, timingSafeEqual, createHash } = require("crypto");
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing
@@ -70,6 +70,9 @@ const TIMEOUT_MS = parseInt(flag("timeout", "120000"), 10);
 const MAX_BODY_BYTES = 1 * 1024 * 1024; // 1 MB
 const MAX_QUEUE_DEPTH = parseInt(flag("queue-depth", "100"), 10);
 const MAX_TURNS = flag("max-turns", "1");
+const AGENT_MAX_TURNS = parseInt(flag("agent-max-turns", "10"), 10);
+const AGENT_TIMEOUT_MS = parseInt(flag("agent-timeout", "600000"), 10); // 10 min
+const AGENT_MCP_CONFIG = flag("agent-mcp-config", ""); // operator default MCP
 const API_KEY = flag("api-key", process.env.API_KEY || "");
 const MODEL_NAME = "claude-code";
 
@@ -111,6 +114,24 @@ const activeProcesses = new Set();
 const spritePool = SPRITE_NAMES.map((name) => ({ name, busy: 0 }));
 const vercelPool = [];
 
+// Agent session affinity
+const sessionToSprite = new Map();  // session_id → sprite name
+const sessionToSandbox = new Map(); // session_id → sandbox id
+
+// Evict stale session mappings every 30 minutes
+const SESSION_TTL_MS = 60 * 60 * 1000; // 1 hour
+const sessionTimestamps = new Map(); // session_id → timestamp
+setInterval(() => {
+  const now = Date.now();
+  for (const [sid, ts] of sessionTimestamps) {
+    if (now - ts > SESSION_TTL_MS) {
+      sessionTimestamps.delete(sid);
+      sessionToSprite.delete(sid);
+      sessionToSandbox.delete(sid);
+    }
+  }
+}, 30 * 60 * 1000);
+
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
@@ -126,6 +147,8 @@ for (const [name, val] of [
   ["concurrency", MAX_CONCURRENCY],
   ["timeout", TIMEOUT_MS],
   ["queue-depth", MAX_QUEUE_DEPTH],
+  ["agent-max-turns", AGENT_MAX_TURNS],
+  ["agent-timeout", AGENT_TIMEOUT_MS],
 ]) {
   if (Number.isNaN(val) || val <= 0) {
     console.error(`Error: --${name} must be a positive number`);
@@ -211,49 +234,89 @@ function enqueue(prompt, systemPrompt, opts = {}) {
   });
 }
 
+function enqueueAgent(prompt, opts = {}) {
+  if (queue.length >= MAX_QUEUE_DEPTH) {
+    return Promise.reject(new Error("Server too busy"));
+  }
+  return new Promise((resolve, reject) => {
+    queue.push({
+      resolve,
+      reject,
+      prompt,
+      isAgent: true,
+      agentOpts: opts,
+      onEvent: opts.onEvent,
+    });
+    drain();
+  });
+}
+
 function drain() {
   while (activeWorkers < MAX_CONCURRENCY && queue.length > 0) {
     const job = queue.shift();
     activeWorkers++;
 
-    const streaming = !!job.onChunk;
-    const execFns = {
-      local: streaming ? runClaudeLocalStreaming : runClaudeLocal,
-      sprite: streaming ? runClaudeSpriteStreaming : runClaudeOnSprite,
-      vercel: streaming ? runClaudeVercelStreaming : runClaudeOnVercel,
-    };
-    const execFn = execFns[BACKEND];
-    const execArgs = streaming
-      ? [job.prompt, job.systemPrompt, job.onChunk, job.token]
-      : [job.prompt, job.systemPrompt, job.token];
+    if (job.isAgent) {
+      // Agent jobs — no retry (side effects make retry dangerous)
+      const agentFns = {
+        local: runAgentLocal,
+        sprite: runAgentOnSprite,
+        vercel: runAgentOnVercel,
+      };
+      const agentFn = agentFns[BACKEND];
 
-    const canRetry = !streaming && BACKEND !== "local";
-
-    const run = async () => {
-      try {
-        const result = await execFn(...execArgs);
-        job.resolve(result);
-      } catch (err) {
-        if (canRetry && !job.retried) {
-          job.retried = true;
-          console.log(`Retrying after error: ${err.message}`);
-          await new Promise((r) => setTimeout(r, 1000));
-          try {
-            const result = await execFn(...execArgs);
-            job.resolve(result);
-          } catch (retryErr) {
-            job.reject(retryErr);
-          }
-        } else {
+      const run = async () => {
+        try {
+          await agentFn(job.prompt, job.agentOpts, job.onEvent);
+          job.resolve();
+        } catch (err) {
           job.reject(err);
+        } finally {
+          activeWorkers--;
+          drain();
         }
-      } finally {
-        activeWorkers--;
-        drain();
-      }
-    };
+      };
+      run();
+    } else {
+      // Completion jobs
+      const streaming = !!job.onChunk;
+      const execFns = {
+        local: streaming ? runClaudeLocalStreaming : runClaudeLocal,
+        sprite: streaming ? runClaudeSpriteStreaming : runClaudeOnSprite,
+        vercel: streaming ? runClaudeVercelStreaming : runClaudeOnVercel,
+      };
+      const execFn = execFns[BACKEND];
+      const execArgs = streaming
+        ? [job.prompt, job.systemPrompt, job.onChunk, job.token]
+        : [job.prompt, job.systemPrompt, job.token];
 
-    run();
+      const canRetry = !streaming && BACKEND !== "local";
+
+      const run = async () => {
+        try {
+          const result = await execFn(...execArgs);
+          job.resolve(result);
+        } catch (err) {
+          if (canRetry && !job.retried) {
+            job.retried = true;
+            console.log(`Retrying after error: ${err.message}`);
+            await new Promise((r) => setTimeout(r, 1000));
+            try {
+              const result = await execFn(...execArgs);
+              job.resolve(result);
+            } catch (retryErr) {
+              job.reject(retryErr);
+            }
+          } else {
+            job.reject(err);
+          }
+        } finally {
+          activeWorkers--;
+          drain();
+        }
+      };
+      run();
+    }
   }
 }
 
@@ -284,6 +347,110 @@ function cleanOutput(text) {
 
 function cleanChunk(text) {
   return text.replace(ANSI_ESCAPES, "").replace(CONTROL_CHARS, "");
+}
+
+// ---------------------------------------------------------------------------
+// Agent CLI args builder
+// ---------------------------------------------------------------------------
+function buildAgentCliArgs(opts) {
+  const cliArgs = [
+    "-p",
+    "--output-format", "stream-json",
+    "--verbose",
+    "--max-turns", String(opts.maxTurns || AGENT_MAX_TURNS),
+    "--permission-mode", "bypassPermissions",
+  ];
+
+  if (opts.sessionId) {
+    cliArgs.push("--resume", opts.sessionId);
+  }
+  if (opts.systemPrompt) {
+    cliArgs.push("--system-prompt", opts.systemPrompt);
+  }
+  if (opts.model) {
+    cliArgs.push("--model", opts.model);
+  }
+  if (opts.allowedTools && opts.allowedTools.length) {
+    cliArgs.push("--allowed-tools", opts.allowedTools.join(","));
+  }
+  if (opts.disallowedTools && opts.disallowedTools.length) {
+    cliArgs.push("--disallowed-tools", opts.disallowedTools.join(","));
+  }
+  if (opts.maxBudgetUsd != null) {
+    cliArgs.push("--max-budget-usd", String(opts.maxBudgetUsd));
+  }
+  if (opts.includePartialMessages) {
+    cliArgs.push("--include-partial-messages");
+  }
+
+  // MCP config: merge operator defaults with per-request
+  const mcpConfig = {};
+  if (AGENT_MCP_CONFIG) {
+    try {
+      Object.assign(mcpConfig, JSON.parse(AGENT_MCP_CONFIG));
+    } catch {
+      console.warn("Warning: invalid --agent-mcp-config JSON, ignoring");
+    }
+  }
+  if (opts.mcpServers && typeof opts.mcpServers === "object") {
+    Object.assign(mcpConfig, opts.mcpServers);
+  }
+  if (Object.keys(mcpConfig).length > 0) {
+    cliArgs.push("--mcp-config", JSON.stringify({ mcpServers: mcpConfig }));
+  }
+
+  return cliArgs;
+}
+
+// ---------------------------------------------------------------------------
+// Agent event sanitizer
+// ---------------------------------------------------------------------------
+function sanitizeEvent(event) {
+  if (!event || typeof event !== "object") return event;
+
+  if (event.type === "system" && event.subtype === "init") {
+    const sanitized = { ...event };
+    // Keep tool names only, strip install paths
+    if (sanitized.tools) {
+      sanitized.tools = sanitized.tools.map((t) =>
+        typeof t === "string" ? t : { name: t.name, type: t.type },
+      );
+    }
+    // Keep MCP server names only
+    if (sanitized.mcp_servers && typeof sanitized.mcp_servers === "object") {
+      sanitized.mcp_servers = Object.keys(sanitized.mcp_servers);
+    }
+    // Strip local paths and sensitive fields
+    delete sanitized.cwd;
+    delete sanitized.plugin_paths;
+    delete sanitized.uuid;
+    // Strip plugin install paths, keep names only
+    if (sanitized.plugins) {
+      sanitized.plugins = sanitized.plugins.map((p) =>
+        typeof p === "string" ? p : { name: p.name },
+      );
+    }
+    return sanitized;
+  }
+
+  return event;
+}
+
+// ---------------------------------------------------------------------------
+// Agent NDJSON line parser helper
+// ---------------------------------------------------------------------------
+function parseNDJSONLines(buffer, onLine) {
+  const lines = buffer.split("\n");
+  const remainder = lines.pop(); // keep incomplete line
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      onLine(JSON.parse(line));
+    } catch {
+      // skip non-JSON lines
+    }
+  }
+  return remainder;
 }
 
 // ---------------------------------------------------------------------------
@@ -387,6 +554,88 @@ function runClaudeLocalStreaming(prompt, systemPrompt, onChunk, clientToken) {
       settled = true;
       if (code === 0) resolve();
       else reject(new Error(stderr || `claude exited with code ${code}`));
+    });
+
+    proc.on("error", (err) => {
+      clearTimeout(timer);
+      activeProcesses.delete(proc);
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
+
+    proc.stdin.write(prompt);
+    proc.stdin.end();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Backend: Local agent subprocess
+// ---------------------------------------------------------------------------
+function runAgentLocal(prompt, opts, onEvent) {
+  return new Promise((resolve, reject) => {
+    const cliArgs = buildAgentCliArgs(opts);
+    const env = { ...process.env, ...buildAuthEnv(opts.clientToken) };
+    const spawnOpts = { stdio: ["pipe", "pipe", "pipe"], env };
+    if (opts.cwd) spawnOpts.cwd = opts.cwd;
+
+    const proc = spawn("claude", cliArgs, spawnOpts);
+    activeProcesses.add(proc);
+
+    let settled = false;
+    let stderr = "";
+    let buffer = "";
+    const timeout = opts.timeoutMs || AGENT_TIMEOUT_MS;
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      proc.kill("SIGTERM");
+      reject(new Error(`Agent timed out after ${timeout}ms`));
+    }, timeout);
+
+    // Abort on client disconnect
+    if (opts.abortSignal) {
+      const onAbort = () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          proc.kill("SIGTERM");
+          activeProcesses.delete(proc);
+          reject(new Error("Agent aborted by client"));
+        }
+      };
+      if (opts.abortSignal.aborted) {
+        onAbort();
+        return;
+      }
+      opts.abortSignal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    proc.stdout.on("data", (chunk) => {
+      buffer += chunk.toString();
+      buffer = parseNDJSONLines(buffer, (event) => {
+        onEvent(sanitizeEvent(event));
+      });
+    });
+
+    proc.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    proc.on("close", (code) => {
+      clearTimeout(timer);
+      activeProcesses.delete(proc);
+      // Flush remaining buffer
+      if (buffer.trim()) {
+        try {
+          onEvent(sanitizeEvent(JSON.parse(buffer.trim())));
+        } catch {}
+      }
+      if (settled) return;
+      settled = true;
+      if (code === 0) resolve();
+      else reject(new Error(stderr || `claude agent exited with code ${code}`));
     });
 
     proc.on("error", (err) => {
@@ -598,6 +847,112 @@ async function runClaudeSpriteStreaming(prompt, systemPrompt, onChunk, clientTok
 }
 
 // ---------------------------------------------------------------------------
+// Backend: Sprite agent exec
+// ---------------------------------------------------------------------------
+function buildSpriteAgentExecUrl(spriteName, opts) {
+  const cliArgs = buildAgentCliArgs(opts);
+  const params = new URLSearchParams();
+  params.append("cmd", "/home/sprite/.claude-wrapper");
+  for (const arg of cliArgs) {
+    params.append("cmd", arg);
+  }
+  params.append("stdin", "true");
+  return `${SPRITE_API}/v1/sprites/${encodeURIComponent(spriteName)}/exec?${params.toString()}`;
+}
+
+async function runAgentOnSprite(prompt, opts, onEvent) {
+  if (opts.clientToken) {
+    console.warn("Warning: sprite backend does not support per-request tokens; using server token");
+  }
+
+  // Session affinity: if resuming, try to use the same sprite
+  let sprite;
+  if (opts.sessionId && sessionToSprite.has(opts.sessionId)) {
+    const spriteName = sessionToSprite.get(opts.sessionId);
+    sprite = spritePool.find((s) => s.name === spriteName);
+    if (sprite) {
+      sprite.busy++;
+    } else {
+      sprite = acquireSprite();
+    }
+  } else {
+    sprite = acquireSprite();
+  }
+
+  try {
+    const url = buildSpriteAgentExecUrl(sprite.name, opts);
+    const controller = new AbortController();
+    const timeout = opts.timeoutMs || AGENT_TIMEOUT_MS;
+    const timer = setTimeout(() => controller.abort(), timeout);
+
+    // Abort on client disconnect
+    if (opts.abortSignal) {
+      opts.abortSignal.addEventListener("abort", () => controller.abort(), { once: true });
+    }
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${SPRITE_TOKEN}`,
+        "Content-Type": "text/plain",
+        Accept: "application/json",
+      },
+      body: prompt,
+      signal: controller.signal,
+    });
+
+    clearTimeout(timer);
+
+    if (!response.ok) {
+      throw new Error(`Sprite agent exec failed (${response.status}): ${await response.text()}`);
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+
+    const trackSession = (event) => {
+      if (event.type === "system" && event.subtype === "init" && event.session_id) {
+        sessionToSprite.set(event.session_id, sprite.name);
+        sessionTimestamps.set(event.session_id, Date.now());
+      }
+    };
+
+    if (contentType.includes("application/json")) {
+      const result = await response.json();
+      if (result.exit_code && result.exit_code !== 0) {
+        throw new Error(result.stderr || `claude agent exited with code ${result.exit_code}`);
+      }
+      // Parse NDJSON from stdout
+      const lines = (result.stdout || "").split("\n");
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const event = JSON.parse(line);
+          trackSession(event);
+          onEvent(sanitizeEvent(event));
+        } catch {}
+      }
+    } else {
+      // Streamed text — parse NDJSON line by line
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8", { fatal: false });
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        buffer = parseNDJSONLines(buffer, (event) => {
+          trackSession(event);
+          onEvent(sanitizeEvent(event));
+        });
+      }
+    }
+  } finally {
+    releaseSprite(sprite);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Backend: Vercel Sandbox via REST API
 // ---------------------------------------------------------------------------
 function vercelHeaders() {
@@ -678,9 +1033,9 @@ async function vercelExec(sandboxId, cmdArgs, env) {
   return data.command.id;
 }
 
-async function vercelStreamLogs(sandboxId, cmdId, onStdout, onStderr) {
+async function vercelStreamLogs(sandboxId, cmdId, onStdout, onStderr, timeoutMs = TIMEOUT_MS) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const res = await fetch(
@@ -838,6 +1193,83 @@ async function runClaudeVercelStreaming(prompt, systemPrompt, onChunk, clientTok
 }
 
 // ---------------------------------------------------------------------------
+// Backend: Vercel agent exec
+// ---------------------------------------------------------------------------
+async function runAgentOnVercel(prompt, opts, onEvent) {
+  // Session affinity: if resuming, try to use the same sandbox
+  let sandbox;
+  if (opts.sessionId && sessionToSandbox.has(opts.sessionId)) {
+    const sandboxId = sessionToSandbox.get(opts.sessionId);
+    sandbox = vercelPool.find((s) => s.id === sandboxId && !s.replacing);
+    if (sandbox) {
+      sandbox.busy++;
+    } else {
+      sessionToSandbox.delete(opts.sessionId);
+      sandbox = acquireVercelSandbox();
+    }
+  } else {
+    sandbox = acquireVercelSandbox();
+  }
+
+  try {
+    const cliArgs = buildAgentCliArgs(opts);
+    cliArgs.push(prompt); // prompt as positional arg
+    const env = buildVercelEnv(opts.clientToken);
+
+    let cmdId;
+    try {
+      cmdId = await vercelExec(sandbox.id, cliArgs, env);
+    } catch (err) {
+      if (
+        err.message.includes("sandbox_stopped") ||
+        err.message.includes("not found")
+      ) {
+        // Clear stale session mappings for this sandbox
+        for (const [sid, sbxId] of sessionToSandbox) {
+          if (sbxId === sandbox.id) sessionToSandbox.delete(sid);
+        }
+        await replaceVercelSandbox(sandbox);
+        cmdId = await vercelExec(sandbox.id, cliArgs, env);
+      } else {
+        throw err;
+      }
+    }
+
+    const timeout = opts.timeoutMs || AGENT_TIMEOUT_MS;
+    let buffer = "";
+    const trackSession = (event) => {
+      if (event.type === "system" && event.subtype === "init" && event.session_id) {
+        sessionToSandbox.set(event.session_id, sandbox.id);
+        sessionTimestamps.set(event.session_id, Date.now());
+      }
+    };
+
+    await vercelStreamLogs(
+      sandbox.id,
+      cmdId,
+      (data) => {
+        buffer += data;
+        buffer = parseNDJSONLines(buffer, (event) => {
+          trackSession(event);
+          onEvent(sanitizeEvent(event));
+        });
+      },
+      (data) => {
+        // stderr — could log for debugging
+      },
+      timeout,
+    );
+
+    const code = await vercelExitCode(sandbox.id, cmdId);
+    if (code !== 0) {
+      throw new Error(`claude agent exited with code ${code}`);
+    }
+  } finally {
+    releaseVercelSandbox(sandbox);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Response builders
 // ---------------------------------------------------------------------------
 function buildOpenAIResponse(text, model, isChat) {
@@ -884,22 +1316,226 @@ function buildAnthropicResponse(text, model) {
   };
 }
 
+function buildModelObject(id) {
+  return {
+    id,
+    object: "model",
+    created: Math.floor(Date.now() / 1000),
+    owned_by: "local",
+    capabilities: { chat: true, completions: true, agent: true, embeddings: false },
+    context_length: 200000,
+    max_output_tokens: 16384,
+  };
+}
+
 function buildOpenAIModelsResponse() {
   return {
     object: "list",
-    data: [
-      {
-        id: MODEL_NAME,
-        object: "model",
-        created: Math.floor(Date.now() / 1000),
-        owned_by: "local",
-      },
-    ],
+    data: [buildModelObject(MODEL_NAME)],
   };
 }
 
 function errorResponse(status, message, type = "invalid_request_error") {
   return { status, body: { error: { message, type, code: status } } };
+}
+
+// ---------------------------------------------------------------------------
+// Embeddings stub — deterministic hash-based pseudo-embeddings
+// ---------------------------------------------------------------------------
+const EMBEDDING_DIM = 1536; // Match OpenAI ada-002 dimension
+
+function hashEmbedding(text) {
+  // Generate a deterministic float vector from text via repeated hashing
+  const vec = new Float64Array(EMBEDDING_DIM);
+  let hash = createHash("sha256").update(text).digest();
+  for (let i = 0; i < EMBEDDING_DIM; i++) {
+    if (i % 32 === 0 && i > 0) {
+      hash = createHash("sha256").update(hash).digest();
+    }
+    // Convert byte to float in [-1, 1]
+    vec[i] = (hash[i % 32] / 127.5) - 1;
+  }
+  // L2 normalize
+  let norm = 0;
+  for (let i = 0; i < EMBEDDING_DIM; i++) norm += vec[i] * vec[i];
+  norm = Math.sqrt(norm);
+  const result = [];
+  for (let i = 0; i < EMBEDDING_DIM; i++) result.push(vec[i] / norm);
+  return result;
+}
+
+function buildEmbeddingResponse(inputs, model) {
+  const data = inputs.map((text, i) => ({
+    object: "embedding",
+    index: i,
+    embedding: hashEmbedding(typeof text === "string" ? text : String(text)),
+  }));
+  return {
+    object: "list",
+    data,
+    model: model || MODEL_NAME,
+    usage: { prompt_tokens: 0, total_tokens: 0 },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI Responses API builder
+// ---------------------------------------------------------------------------
+function extractResponsesPrompt(body) {
+  const input = body.input;
+  if (!input) return { prompt: null, systemPrompt: null };
+
+  // String input
+  if (typeof input === "string") {
+    return { prompt: input, systemPrompt: body.instructions || null };
+  }
+
+  // Array of message objects
+  if (Array.isArray(input)) {
+    let systemPrompt = body.instructions || null;
+    const parts = [];
+    for (const item of input) {
+      // String item in array
+      if (typeof item === "string") {
+        parts.push(`user: ${item}`);
+        continue;
+      }
+      if (item.role === "system" || item.role === "developer") {
+        const text = typeof item.content === "string"
+          ? item.content
+          : Array.isArray(item.content)
+            ? item.content.map((c) => c.text || "").join("\n")
+            : "";
+        systemPrompt = systemPrompt ? `${systemPrompt}\n${text}` : text;
+      } else {
+        const text = typeof item.content === "string"
+          ? item.content
+          : Array.isArray(item.content)
+            ? item.content.map((c) => c.text || "").join("\n")
+            : "";
+        parts.push(`${item.role}: ${text}`);
+      }
+    }
+    return { prompt: parts.join("\n\n") || null, systemPrompt };
+  }
+
+  return { prompt: null, systemPrompt: null };
+}
+
+function buildResponsesResponse(text, model) {
+  const id = `resp_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+  return {
+    id,
+    object: "response",
+    created_at: Math.floor(Date.now() / 1000),
+    model: model || MODEL_NAME,
+    status: "completed",
+    output: [
+      {
+        type: "message",
+        id: `msg_${randomUUID().replace(/-/g, "").slice(0, 16)}`,
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text }],
+      },
+    ],
+    usage: {
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+    },
+  };
+}
+
+async function handleResponsesStream(
+  req, res, start, prompt, systemPrompt, model, clientToken,
+) {
+  const respId = `resp_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+  const msgId = `msg_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+  const m = model || MODEL_NAME;
+  const created = Math.floor(Date.now() / 1000);
+
+  initSSE(res, req, start);
+
+  // response.created
+  sseEvent(res, "response.created", {
+    type: "response.created",
+    response: {
+      id: respId, object: "response", created_at: created, model: m,
+      status: "in_progress", output: [],
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    },
+  });
+
+  // output_item.added
+  sseEvent(res, "response.output_item.added", {
+    type: "response.output_item.added",
+    output_index: 0,
+    item: {
+      type: "message", id: msgId, role: "assistant",
+      status: "in_progress", content: [],
+    },
+  });
+
+  // content_part.added
+  sseEvent(res, "response.content_part.added", {
+    type: "response.content_part.added",
+    output_index: 0,
+    content_index: 0,
+    part: { type: "output_text", text: "" },
+  });
+
+  try {
+    await enqueue(prompt, systemPrompt, {
+      token: clientToken,
+      onChunk: (text) => {
+        sseEvent(res, "response.output_text.delta", {
+          type: "response.output_text.delta",
+          output_index: 0,
+          content_index: 0,
+          delta: text,
+        });
+      },
+    });
+
+    // content_part.done
+    sseEvent(res, "response.content_part.done", {
+      type: "response.content_part.done",
+      output_index: 0,
+      content_index: 0,
+      part: { type: "output_text", text: "" },
+    });
+
+    // output_item.done
+    sseEvent(res, "response.output_item.done", {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: {
+        type: "message", id: msgId, role: "assistant",
+        status: "completed", content: [{ type: "output_text", text: "" }],
+      },
+    });
+
+    // response.completed
+    sseEvent(res, "response.completed", {
+      type: "response.completed",
+      response: {
+        id: respId, object: "response", created_at: created, model: m,
+        status: "completed", output: [{
+          type: "message", id: msgId, role: "assistant",
+          status: "completed", content: [{ type: "output_text", text: "" }],
+        }],
+        usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      },
+    });
+  } catch (err) {
+    sseEvent(res, "error", {
+      type: "error",
+      error: { message: err.message, type: "server_error", code: "server_error" },
+    });
+  }
+
+  res.end();
 }
 
 // ---------------------------------------------------------------------------
@@ -1085,6 +1721,108 @@ async function handleAnthropicStream(
 }
 
 // ---------------------------------------------------------------------------
+// Agent SSE streaming handler
+// ---------------------------------------------------------------------------
+async function handleAgentStream(req, res, start, prompt, agentOpts) {
+  initSSE(res, req, start);
+
+  const keepalive = setInterval(() => {
+    if (!res.writableEnded) res.write(":ping\n\n");
+  }, 15000);
+
+  let aborted = false;
+  const abortController = new AbortController();
+
+  res.on("close", () => {
+    aborted = true;
+    abortController.abort();
+    clearInterval(keepalive);
+  });
+
+  agentOpts.abortSignal = abortController.signal;
+
+  try {
+    await enqueueAgent(prompt, {
+      ...agentOpts,
+      onEvent: (event) => {
+        if (aborted) return;
+        sseEvent(res, event.type || "message", event);
+      },
+    });
+
+    if (!aborted) {
+      res.write("event: done\ndata: [DONE]\n\n");
+      res.end();
+    }
+  } catch (err) {
+    if (!aborted) {
+      sseEvent(res, "error", {
+        type: "error",
+        error: { message: err.message, type: "server_error" },
+      });
+      res.write("event: done\ndata: [DONE]\n\n");
+      res.end();
+    }
+  } finally {
+    clearInterval(keepalive);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Agent buffered (non-streaming) handler
+// ---------------------------------------------------------------------------
+async function handleAgentBuffered(req, res, start, prompt, agentOpts, sendJSON) {
+  const events = [];
+  let sessionId = null;
+  let totalCostUsd = 0;
+  let numTurns = 0;
+  let resultText = "";
+  let usage = {};
+
+  try {
+    await enqueueAgent(prompt, {
+      ...agentOpts,
+      onEvent: (event) => {
+        events.push(event);
+
+        if (event.type === "system" && event.subtype === "init") {
+          sessionId = event.session_id;
+        }
+        if (event.type === "result") {
+          sessionId = event.session_id || sessionId;
+          totalCostUsd = event.total_cost_usd || 0;
+          numTurns = event.num_turns || 0;
+          usage = event.usage || {};
+          resultText = event.result || resultText;
+        }
+        // Extract text from assistant messages
+        if (event.type === "assistant" && event.message) {
+          const textBlocks = (event.message.content || []).filter(
+            (b) => b.type === "text",
+          );
+          if (textBlocks.length > 0) {
+            resultText = textBlocks.map((b) => b.text).join("\n");
+          }
+        }
+      },
+    });
+
+    sendJSON(200, {
+      session_id: sessionId,
+      result: resultText,
+      num_turns: numTurns,
+      total_cost_usd: totalCostUsd,
+      usage,
+      events,
+    });
+  } catch (err) {
+    sendJSON(500, {
+      error: { message: err.message, type: "server_error", code: 500 },
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Request parsing
 // ---------------------------------------------------------------------------
 function parseBody(req) {
@@ -1236,7 +1974,20 @@ const server = http.createServer(async (req, res) => {
   // Forward Anthropic keys to the backend for downstream auth
   const forwardToken = isAnthropicKey ? clientToken : null;
 
-  const url = req.url.split("?")[0];
+  let url = req.url.split("?")[0];
+
+  // Normalize prefix-less routes: /chat/completions → /v1/chat/completions
+  // Many SDKs set base_url with or without /v1/, causing 404s
+  const V1_ROUTES = [
+    "/chat/completions", "/completions", "/models", "/messages",
+    "/messages/count_tokens", "/agent", "/embeddings", "/responses", "/status",
+  ];
+  for (const route of V1_ROUTES) {
+    if (url === route || (route === "/models" && url.startsWith("/models/"))) {
+      url = `/v1${url}`;
+      break;
+    }
+  }
 
   try {
     // ----- Health / Info -----
@@ -1251,8 +2002,12 @@ const server = http.createServer(async (req, res) => {
         endpoints: {
           openai_chat: "POST /v1/chat/completions",
           openai_completions: "POST /v1/completions",
+          openai_responses: "POST /v1/responses",
+          openai_embeddings: "POST /v1/embeddings",
           anthropic_messages: "POST /v1/messages",
           anthropic_count_tokens: "POST /v1/messages/count_tokens",
+          agent: "POST /v1/agent",
+          openapi_spec: "GET  /openapi.json",
           models: "GET  /v1/models",
           model_detail: "GET  /v1/models/:id",
         },
@@ -1272,6 +2027,23 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(200, info);
     }
 
+    // ----- OpenAPI spec -----
+    if (url === "/openapi.json" && req.method === "GET") {
+      try {
+        const specPath = require("path").join(__dirname, "openapi.json");
+        const spec = require("fs").readFileSync(specPath, "utf-8");
+        res.writeHead(200, {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        });
+        res.end(spec);
+        console.log(`${req.method} ${req.url} 200 ${Date.now() - start}ms`);
+        return;
+      } catch {
+        return sendJSON(404, { error: { message: "openapi.json not found", type: "not_found" } });
+      }
+    }
+
     // ----- OpenAI: GET /v1/models -----
     if (url === "/v1/models" && req.method === "GET") {
       return sendJSON(200, buildOpenAIModelsResponse());
@@ -1281,12 +2053,7 @@ const server = http.createServer(async (req, res) => {
     if (url.startsWith("/v1/models/") && req.method === "GET") {
       const modelId = decodeURIComponent(url.slice("/v1/models/".length));
       if (modelId === MODEL_NAME) {
-        return sendJSON(200, {
-          id: MODEL_NAME,
-          object: "model",
-          created: Math.floor(Date.now() / 1000),
-          owned_by: "local",
-        });
+        return sendJSON(200, buildModelObject(MODEL_NAME));
       }
       return sendJSON(404, {
         error: {
@@ -1328,7 +2095,11 @@ const server = http.createServer(async (req, res) => {
         const err = errorResponse(400, "prompt is required");
         return sendJSON(err.status, err.body);
       }
-      const p = typeof prompt === "string" ? prompt : prompt.join("\n");
+      let p = typeof prompt === "string" ? prompt : prompt.join("\n");
+      // FIM (fill-in-the-middle): wrap prefix + suffix for infill
+      if (body.suffix) {
+        p = `Complete the code that goes between <prefix> and <suffix>. Return ONLY the infill code, nothing else.\n\n<prefix>\n${p}\n</prefix>\n\n<suffix>\n${body.suffix}\n</suffix>`;
+      }
       if (body.stream) {
         return await handleOpenAICompletionsStream(
           req,
@@ -1376,6 +2147,36 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(200, { input_tokens: inputTokens });
     }
 
+    // ----- OpenAI: POST /v1/embeddings -----
+    if (url === "/v1/embeddings" && req.method === "POST") {
+      const body = await parseBody(req);
+      const input = body.input;
+      if (!input) {
+        const err = errorResponse(400, "input is required");
+        return sendJSON(err.status, err.body);
+      }
+      // Normalize to array
+      const inputs = Array.isArray(input) ? input : [input];
+      return sendJSON(200, buildEmbeddingResponse(inputs, body.model));
+    }
+
+    // ----- OpenAI: POST /v1/responses -----
+    if (url === "/v1/responses" && req.method === "POST") {
+      const body = await parseBody(req);
+      const { prompt, systemPrompt } = extractResponsesPrompt(body);
+      if (!prompt) {
+        const err = errorResponse(400, "input is required");
+        return sendJSON(err.status, err.body);
+      }
+      if (body.stream) {
+        return await handleResponsesStream(
+          req, res, start, prompt, systemPrompt, body.model, forwardToken,
+        );
+      }
+      const text = await enqueue(prompt, systemPrompt, { token: forwardToken });
+      return sendJSON(200, buildResponsesResponse(text, body.model));
+    }
+
     // ----- Queue status -----
     if (url === "/v1/status" && req.method === "GET") {
       const status = {
@@ -1397,6 +2198,45 @@ const server = http.createServer(async (req, res) => {
         }));
       }
       return sendJSON(200, status);
+    }
+
+    // ----- Agent API: POST /v1/agent -----
+    if (url === "/v1/agent" && req.method === "POST") {
+      const body = await parseBody(req);
+      if (!body.prompt) {
+        const err = errorResponse(400, "prompt is required");
+        return sendJSON(err.status, err.body);
+      }
+
+      const agentOpts = {
+        sessionId: body.session_id || null,
+        maxTurns: body.max_turns || AGENT_MAX_TURNS,
+        systemPrompt: body.system_prompt || null,
+        model: body.model || null,
+        allowedTools: body.allowed_tools || null,
+        disallowedTools: body.disallowed_tools || null,
+        maxBudgetUsd: body.max_budget_usd != null ? body.max_budget_usd : null,
+        cwd: body.cwd || null,
+        includePartialMessages: body.include_partial_messages || false,
+        mcpServers: body.mcp_servers || null,
+        clientToken: forwardToken,
+        timeoutMs: body.timeout_ms || null,
+      };
+
+      const stream = body.stream !== false; // default true
+
+      if (stream) {
+        return await handleAgentStream(req, res, start, body.prompt, agentOpts);
+      } else {
+        return await handleAgentBuffered(
+          req,
+          res,
+          start,
+          body.prompt,
+          agentOpts,
+          sendJSON,
+        );
+      }
     }
 
     sendJSON(404, { error: { message: "Not found", type: "not_found" } });
@@ -1441,12 +2281,16 @@ async function start() {
 ║  Endpoints:                                              ║
 ║    POST /v1/chat/completions      (OpenAI chat)          ║
 ║    POST /v1/completions           (OpenAI completions)   ║
+║    POST /v1/responses             (OpenAI responses)     ║
+║    POST /v1/embeddings            (OpenAI embeddings)    ║
 ║    POST /v1/messages              (Anthropic messages)   ║
 ║    POST /v1/messages/count_tokens (Anthropic tokens)     ║
+║    POST /v1/agent                 (Agent API)            ║
 ║    GET  /v1/models                (Model list)           ║
 ║    GET  /v1/models/:id            (Model detail)         ║
 ║    GET  /v1/status                (Queue status)         ║
 ║    GET  /                         (Health check)         ║
+║    * /v1/ prefix optional on all routes                  ║
 ║                                                          ║
 ╚══════════════════════════════════════════════════════════╝
 `);

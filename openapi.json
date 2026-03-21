@@ -1,0 +1,1160 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "OpenCompletions API",
+    "description": "A lightweight server wrapping Claude Code CLI as a completions and agent API, with OpenAI-compatible, Anthropic-compatible, and multi-turn Agent endpoints.",
+    "version": "1.0.0",
+    "license": {
+      "name": "MIT"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3456",
+      "description": "Local development server"
+    }
+  ],
+  "security": [
+    {
+      "BearerAuth": []
+    }
+  ],
+  "paths": {
+    "/": {
+      "get": {
+        "operationId": "healthCheck",
+        "summary": "Health check and server info",
+        "tags": ["Utility"],
+        "responses": {
+          "200": {
+            "description": "Server status and configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "operationId": "listModels",
+        "summary": "List available models",
+        "tags": ["OpenAI-Compatible"],
+        "responses": {
+          "200": {
+            "description": "Model list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/models/{model_id}": {
+      "get": {
+        "operationId": "getModel",
+        "summary": "Get model details",
+        "tags": ["OpenAI-Compatible"],
+        "parameters": [
+          {
+            "name": "model_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Model details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Model"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Model not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/chat/completions": {
+      "post": {
+        "operationId": "createChatCompletion",
+        "summary": "Create a chat completion (OpenAI-compatible)",
+        "tags": ["OpenAI-Compatible"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatCompletionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Chat completion response. When `stream: true`, returns SSE stream of `ChatCompletionChunk` objects.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatCompletionResponse"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatCompletionChunk"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/completions": {
+      "post": {
+        "operationId": "createCompletion",
+        "summary": "Create a text completion (OpenAI-compatible)",
+        "tags": ["OpenAI-Compatible"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompletionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Text completion response. When `stream: true`, returns SSE stream.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompletionResponse"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompletionChunk"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/messages": {
+      "post": {
+        "operationId": "createMessage",
+        "summary": "Create a message (Anthropic-compatible)",
+        "tags": ["Anthropic-Compatible"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnthropicMessageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Message response. When `stream: true`, returns SSE stream of Anthropic event types.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnthropicMessageResponse"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "object",
+                  "description": "Anthropic SSE events: message_start, content_block_start, content_block_delta, content_block_stop, message_delta, message_stop"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/messages/count_tokens": {
+      "post": {
+        "operationId": "countTokens",
+        "summary": "Estimate token count (Anthropic-compatible)",
+        "tags": ["Anthropic-Compatible"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnthropicMessageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Token count estimate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "input_tokens": {
+                      "type": "integer",
+                      "description": "Estimated input token count (~4 chars per token)"
+                    }
+                  },
+                  "required": ["input_tokens"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/embeddings": {
+      "post": {
+        "operationId": "createEmbedding",
+        "summary": "Create embeddings (stub)",
+        "description": "Returns deterministic hash-based pseudo-embeddings (1536 dimensions). These are NOT semantically meaningful — they exist for SDK compatibility with tools like Continue.dev and LangChain that expect this endpoint. Use a real embedding provider for semantic search.",
+        "tags": ["OpenAI-Compatible"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmbeddingRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Embedding vectors",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmbeddingResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/responses": {
+      "post": {
+        "operationId": "createResponse",
+        "summary": "Create a response (OpenAI Responses API)",
+        "description": "OpenAI's new unified API format. Accepts `input` (string or message array) and optional `instructions` (system prompt). Supports streaming.",
+        "tags": ["OpenAI-Compatible"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResponsesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Response object. When `stream: true`, returns SSE with response.* event types.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsesResponse"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "object",
+                  "description": "SSE events: response.created, response.output_text.delta, response.completed, etc."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/agent": {
+      "post": {
+        "operationId": "createAgentRun",
+        "summary": "Run a multi-turn agent with tool use",
+        "description": "Starts an autonomous agent that can use tools (Read, Edit, Bash, etc.) across multiple turns. Streams Claude Code's NDJSON events as SSE by default. Supports session resumption, tool restrictions, MCP servers, and budget caps.",
+        "tags": ["Agent"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Agent run result. When `stream: true` (default), returns SSE with event types: `system`, `assistant`, `user`, `result`, `done`. When `stream: false`, returns a single JSON object.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentBufferedResponse"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "oneOf": [
+                    { "$ref": "#/components/schemas/AgentSystemEvent" },
+                    { "$ref": "#/components/schemas/AgentAssistantEvent" },
+                    { "$ref": "#/components/schemas/AgentUserEvent" },
+                    { "$ref": "#/components/schemas/AgentResultEvent" }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request (e.g. missing prompt)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Server too busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/status": {
+      "get": {
+        "operationId": "getStatus",
+        "summary": "Queue and worker status",
+        "tags": ["Utility"],
+        "responses": {
+          "200": {
+            "description": "Current queue depth and worker status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "API key configured via `--api-key` flag. Also accepts Anthropic API keys (sk-ant-*) which are forwarded to the backend."
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "message": { "type": "string" },
+              "type": { "type": "string" },
+              "code": { "type": "integer" }
+            },
+            "required": ["message", "type"]
+          }
+        },
+        "required": ["error"]
+      },
+      "Model": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "example": "claude-code" },
+          "object": { "type": "string", "enum": ["model"] },
+          "created": { "type": "integer" },
+          "owned_by": { "type": "string", "example": "local" },
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "chat": { "type": "boolean" },
+              "completions": { "type": "boolean" },
+              "agent": { "type": "boolean" },
+              "embeddings": { "type": "boolean" }
+            }
+          },
+          "context_length": { "type": "integer", "example": 200000 },
+          "max_output_tokens": { "type": "integer", "example": 16384 }
+        },
+        "required": ["id", "object", "created", "owned_by"]
+      },
+      "ModelListResponse": {
+        "type": "object",
+        "properties": {
+          "object": { "type": "string", "enum": ["list"] },
+          "data": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Model" }
+          }
+        },
+        "required": ["object", "data"]
+      },
+      "Usage": {
+        "type": "object",
+        "properties": {
+          "prompt_tokens": { "type": "integer" },
+          "completion_tokens": { "type": "integer" },
+          "total_tokens": { "type": "integer" }
+        }
+      },
+      "ChatCompletionRequest": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "Model name (ignored, always uses claude-code)",
+            "example": "claude-code"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "role": { "type": "string", "enum": ["system", "user", "assistant"] },
+                "content": {
+                  "oneOf": [
+                    { "type": "string" },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "type": { "type": "string" },
+                          "text": { "type": "string" }
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "required": ["role", "content"]
+            },
+            "minItems": 1
+          },
+          "stream": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, returns SSE stream of chunks"
+          }
+        },
+        "required": ["messages"]
+      },
+      "ChatCompletionResponse": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "example": "chatcmpl-abc123" },
+          "object": { "type": "string", "enum": ["chat.completion"] },
+          "created": { "type": "integer" },
+          "model": { "type": "string" },
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": { "type": "integer" },
+                "message": {
+                  "type": "object",
+                  "properties": {
+                    "role": { "type": "string", "enum": ["assistant"] },
+                    "content": { "type": "string" }
+                  },
+                  "required": ["role", "content"]
+                },
+                "finish_reason": { "type": "string", "enum": ["stop"] }
+              },
+              "required": ["index", "message", "finish_reason"]
+            }
+          },
+          "usage": { "$ref": "#/components/schemas/Usage" }
+        },
+        "required": ["id", "object", "created", "model", "choices", "usage"]
+      },
+      "ChatCompletionChunk": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "object": { "type": "string", "enum": ["chat.completion.chunk"] },
+          "created": { "type": "integer" },
+          "model": { "type": "string" },
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": { "type": "integer" },
+                "delta": {
+                  "type": "object",
+                  "properties": {
+                    "role": { "type": "string" },
+                    "content": { "type": "string" }
+                  }
+                },
+                "finish_reason": {
+                  "type": ["string", "null"],
+                  "enum": ["stop", null]
+                }
+              }
+            }
+          }
+        }
+      },
+      "CompletionRequest": {
+        "type": "object",
+        "properties": {
+          "model": { "type": "string", "example": "claude-code" },
+          "prompt": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "array", "items": { "type": "string" } }
+            ]
+          },
+          "stream": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": ["prompt"]
+      },
+      "CompletionResponse": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "example": "cmpl-abc123" },
+          "object": { "type": "string", "enum": ["text_completion"] },
+          "created": { "type": "integer" },
+          "model": { "type": "string" },
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": { "type": "integer" },
+                "text": { "type": "string" },
+                "finish_reason": { "type": "string", "enum": ["stop"] }
+              },
+              "required": ["index", "text", "finish_reason"]
+            }
+          },
+          "usage": { "$ref": "#/components/schemas/Usage" }
+        },
+        "required": ["id", "object", "created", "model", "choices", "usage"]
+      },
+      "CompletionChunk": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "object": { "type": "string", "enum": ["text_completion"] },
+          "created": { "type": "integer" },
+          "model": { "type": "string" },
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "index": { "type": "integer" },
+                "text": { "type": "string" },
+                "finish_reason": {
+                  "type": ["string", "null"],
+                  "enum": ["stop", null]
+                }
+              }
+            }
+          }
+        }
+      },
+      "AnthropicMessageRequest": {
+        "type": "object",
+        "properties": {
+          "model": { "type": "string", "example": "claude-code" },
+          "system": {
+            "oneOf": [
+              { "type": "string" },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": { "type": "string" },
+                    "text": { "type": "string" }
+                  }
+                }
+              }
+            ],
+            "description": "System prompt"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "role": { "type": "string", "enum": ["user", "assistant"] },
+                "content": {
+                  "oneOf": [
+                    { "type": "string" },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "type": { "type": "string" },
+                          "text": { "type": "string" }
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "required": ["role", "content"]
+            },
+            "minItems": 1
+          },
+          "max_tokens": { "type": "integer", "description": "Ignored (accepted for SDK compatibility)" },
+          "stream": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": ["messages"]
+      },
+      "AnthropicMessageResponse": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "example": "msg_abc123" },
+          "type": { "type": "string", "enum": ["message"] },
+          "role": { "type": "string", "enum": ["assistant"] },
+          "model": { "type": "string" },
+          "content": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": { "type": "string", "enum": ["text"] },
+                "text": { "type": "string" }
+              },
+              "required": ["type", "text"]
+            }
+          },
+          "stop_reason": { "type": "string", "enum": ["end_turn"] },
+          "stop_sequence": { "type": ["string", "null"] },
+          "usage": {
+            "type": "object",
+            "properties": {
+              "input_tokens": { "type": "integer" },
+              "output_tokens": { "type": "integer" }
+            }
+          }
+        },
+        "required": ["id", "type", "role", "model", "content", "stop_reason", "usage"]
+      },
+      "AgentRequest": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "The task for the agent to perform"
+          },
+          "system_prompt": {
+            "type": ["string", "null"],
+            "description": "Optional system prompt"
+          },
+          "session_id": {
+            "type": ["string", "null"],
+            "description": "Resume a previous agent session (requires same backend worker)"
+          },
+          "max_turns": {
+            "type": "integer",
+            "default": 10,
+            "minimum": 1,
+            "description": "Maximum number of agent turns"
+          },
+          "max_budget_usd": {
+            "type": ["number", "null"],
+            "description": "Cost cap in USD. Agent stops when exceeded."
+          },
+          "allowed_tools": {
+            "type": ["array", "null"],
+            "items": { "type": "string" },
+            "description": "Whitelist of tools the agent may use (e.g. [\"Read\", \"Glob\", \"Grep\"])",
+            "example": ["Read", "Glob", "Grep", "Bash"]
+          },
+          "disallowed_tools": {
+            "type": ["array", "null"],
+            "items": { "type": "string" },
+            "description": "Blacklist of tools the agent may not use"
+          },
+          "model": {
+            "type": ["string", "null"],
+            "description": "Override the Claude model used by the agent",
+            "example": "claude-sonnet-4-20250514"
+          },
+          "cwd": {
+            "type": ["string", "null"],
+            "description": "Working directory for the agent (local backend only)"
+          },
+          "stream": {
+            "type": "boolean",
+            "default": true,
+            "description": "If true (default), returns SSE event stream. If false, returns buffered JSON."
+          },
+          "include_partial_messages": {
+            "type": "boolean",
+            "default": false,
+            "description": "Include partial/streaming message events"
+          },
+          "mcp_servers": {
+            "type": ["object", "null"],
+            "description": "Per-request MCP server configuration. Keys are server names, values are server configs.",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": ["http", "sse", "stdio"],
+                  "description": "MCP transport type"
+                },
+                "url": {
+                  "type": "string",
+                  "description": "Server URL (for http/sse types)"
+                },
+                "headers": {
+                  "type": "object",
+                  "additionalProperties": { "type": "string" },
+                  "description": "HTTP headers (for http/sse types)"
+                },
+                "command": {
+                  "type": "string",
+                  "description": "Command to run (for stdio type)"
+                },
+                "args": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Command arguments (for stdio type)"
+                }
+              }
+            },
+            "example": {
+              "sentry": {
+                "type": "http",
+                "url": "https://mcp.sentry.dev/mcp",
+                "headers": { "Authorization": "Bearer token" }
+              }
+            }
+          },
+          "timeout_ms": {
+            "type": ["integer", "null"],
+            "description": "Per-request timeout in milliseconds (default: 600000 = 10 min)"
+          }
+        },
+        "required": ["prompt"]
+      },
+      "AgentSystemEvent": {
+        "type": "object",
+        "description": "Initial event with session info and available tools",
+        "properties": {
+          "type": { "type": "string", "enum": ["system"] },
+          "subtype": { "type": "string", "enum": ["init"] },
+          "session_id": { "type": "string", "format": "uuid" },
+          "tools": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                { "type": "string" },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": { "type": "string" },
+                    "type": { "type": "string" }
+                  }
+                }
+              ]
+            }
+          },
+          "model": { "type": "string" },
+          "mcp_servers": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Names of connected MCP servers"
+          }
+        },
+        "required": ["type", "subtype", "session_id"]
+      },
+      "AgentAssistantEvent": {
+        "type": "object",
+        "description": "Assistant message (may contain text and/or tool_use blocks)",
+        "properties": {
+          "type": { "type": "string", "enum": ["assistant"] },
+          "message": {
+            "type": "object",
+            "properties": {
+              "role": { "type": "string", "enum": ["assistant"] },
+              "content": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": { "type": "string", "enum": ["text", "tool_use"] },
+                    "text": { "type": "string" },
+                    "name": { "type": "string", "description": "Tool name (for tool_use)" },
+                    "id": { "type": "string", "description": "Tool use ID (for tool_use)" },
+                    "input": { "type": "object", "description": "Tool input (for tool_use)" }
+                  }
+                }
+              }
+            }
+          },
+          "session_id": { "type": "string" }
+        },
+        "required": ["type", "message"]
+      },
+      "AgentUserEvent": {
+        "type": "object",
+        "description": "Tool result from agent execution",
+        "properties": {
+          "type": { "type": "string", "enum": ["user"] },
+          "message": {
+            "type": "object",
+            "properties": {
+              "role": { "type": "string", "enum": ["user"] },
+              "content": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": { "type": "string", "enum": ["tool_result"] },
+                    "tool_use_id": { "type": "string" },
+                    "content": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "session_id": { "type": "string" }
+        },
+        "required": ["type", "message"]
+      },
+      "AgentResultEvent": {
+        "type": "object",
+        "description": "Final result event with cost and usage summary",
+        "properties": {
+          "type": { "type": "string", "enum": ["result"] },
+          "subtype": { "type": "string", "enum": ["success", "error"] },
+          "result": { "type": "string", "description": "Final text output from the agent" },
+          "session_id": { "type": "string", "format": "uuid" },
+          "num_turns": { "type": "integer" },
+          "total_cost_usd": { "type": "number" },
+          "duration_ms": { "type": "integer" },
+          "usage": { "type": "object" }
+        },
+        "required": ["type", "session_id"]
+      },
+      "AgentBufferedResponse": {
+        "type": "object",
+        "description": "Non-streaming agent response (when stream: false)",
+        "properties": {
+          "session_id": {
+            "type": ["string", "null"],
+            "format": "uuid",
+            "description": "Session ID for resuming this agent"
+          },
+          "result": {
+            "type": "string",
+            "description": "Final text output from the agent"
+          },
+          "num_turns": {
+            "type": "integer",
+            "description": "Number of turns the agent took"
+          },
+          "total_cost_usd": {
+            "type": "number",
+            "description": "Total API cost in USD"
+          },
+          "usage": {
+            "type": "object",
+            "description": "Detailed token usage breakdown"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "All events that occurred during the agent run"
+          }
+        },
+        "required": ["session_id", "result", "num_turns", "total_cost_usd", "usage", "events"]
+      },
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "example": "opencompletions" },
+          "status": { "type": "string", "enum": ["ok"] },
+          "backend": { "type": "string", "enum": ["local", "sprite", "vercel"] },
+          "active_workers": { "type": "integer" },
+          "queued": { "type": "integer" },
+          "max_concurrency": { "type": "integer" },
+          "endpoints": { "type": "object" }
+        },
+        "required": ["name", "status", "backend"]
+      },
+      "StatusResponse": {
+        "type": "object",
+        "properties": {
+          "active_workers": { "type": "integer" },
+          "queued": { "type": "integer" },
+          "max_concurrency": { "type": "integer" },
+          "backend": { "type": "string" }
+        },
+        "required": ["active_workers", "queued", "max_concurrency", "backend"]
+      },
+      "EmbeddingRequest": {
+        "type": "object",
+        "properties": {
+          "input": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "array", "items": { "type": "string" } }
+            ],
+            "description": "Text(s) to embed"
+          },
+          "model": {
+            "type": "string",
+            "description": "Model name (ignored)"
+          }
+        },
+        "required": ["input"]
+      },
+      "EmbeddingResponse": {
+        "type": "object",
+        "properties": {
+          "object": { "type": "string", "enum": ["list"] },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "object": { "type": "string", "enum": ["embedding"] },
+                "index": { "type": "integer" },
+                "embedding": {
+                  "type": "array",
+                  "items": { "type": "number" },
+                  "description": "1536-dimensional float vector (hash-based stub)"
+                }
+              },
+              "required": ["object", "index", "embedding"]
+            }
+          },
+          "model": { "type": "string" },
+          "usage": {
+            "type": "object",
+            "properties": {
+              "prompt_tokens": { "type": "integer" },
+              "total_tokens": { "type": "integer" }
+            }
+          }
+        },
+        "required": ["object", "data", "model", "usage"]
+      },
+      "ResponsesRequest": {
+        "type": "object",
+        "properties": {
+          "model": { "type": "string", "example": "claude-code" },
+          "input": {
+            "oneOf": [
+              { "type": "string" },
+              {
+                "type": "array",
+                "items": {
+                  "oneOf": [
+                    { "type": "string" },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "role": { "type": "string", "enum": ["user", "assistant", "system", "developer"] },
+                        "content": {
+                          "oneOf": [
+                            { "type": "string" },
+                            { "type": "array", "items": { "type": "object" } }
+                          ]
+                        }
+                      },
+                      "required": ["role", "content"]
+                    }
+                  ]
+                }
+              }
+            ],
+            "description": "The input to generate a response for. Can be a string or array of message objects."
+          },
+          "instructions": {
+            "type": ["string", "null"],
+            "description": "System prompt / developer instructions"
+          },
+          "stream": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, returns SSE stream of response events"
+          }
+        },
+        "required": ["input"]
+      },
+      "ResponsesResponse": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "example": "resp_abc123" },
+          "object": { "type": "string", "enum": ["response"] },
+          "created_at": { "type": "integer" },
+          "model": { "type": "string" },
+          "status": { "type": "string", "enum": ["completed"] },
+          "output": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": { "type": "string", "enum": ["message"] },
+                "id": { "type": "string" },
+                "role": { "type": "string", "enum": ["assistant"] },
+                "status": { "type": "string", "enum": ["completed"] },
+                "content": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "type": { "type": "string", "enum": ["output_text"] },
+                      "text": { "type": "string" }
+                    },
+                    "required": ["type", "text"]
+                  }
+                }
+              },
+              "required": ["type", "id", "role", "status", "content"]
+            }
+          },
+          "usage": {
+            "type": "object",
+            "properties": {
+              "input_tokens": { "type": "integer" },
+              "output_tokens": { "type": "integer" },
+              "total_tokens": { "type": "integer" }
+            }
+          }
+        },
+        "required": ["id", "object", "created_at", "model", "status", "output", "usage"]
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "OpenAI-Compatible",
+      "description": "Endpoints compatible with the OpenAI API format"
+    },
+    {
+      "name": "Anthropic-Compatible",
+      "description": "Endpoints compatible with the Anthropic API format"
+    },
+    {
+      "name": "Agent",
+      "description": "Multi-turn autonomous agent API with tool use and MCP support"
+    },
+    {
+      "name": "Utility",
+      "description": "Health check and status endpoints"
+    }
+  ]
+}
