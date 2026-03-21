@@ -826,33 +826,25 @@ function runAgentLocal(prompt, opts, onEvent) {
 
 // Write auth wrapper to sprite filesystem via stdin (keeps token out of URLs,
 // avoids shell interpretation of args by using exec with separate cmd params)
+// Sprite wrapper: reads env vars from stdin (one per line) until blank line,
+// then execs claude with remaining stdin as the prompt. No credentials on
+// disk or in URLs — auth flows per-request through the POST body.
+const SPRITE_WRAPPER_SCRIPT = [
+  "#!/bin/bash",
+  'while IFS= read -r line; do [ -z "$line" ] && break; export "$line"; done',
+  'exec claude "$@"',
+].join("\n");
+
 async function initSpriteSetup(spriteName) {
-  const script = [
-    "#!/bin/bash",
-    "set -a; source ~/.claude-env 2>/dev/null; set +a",
-    'exec claude "$@"',
-  ].join("\n");
-
-  const envLines = [];
-  if (CONFIGURED_API_KEY) {
-    envLines.push(`ANTHROPIC_API_KEY='${CONFIGURED_API_KEY.replace(/'/g, "'\\''")}'`);
-  }
-  if (CONFIGURED_OAUTH_TOKEN) {
-    envLines.push(`CLAUDE_CODE_OAUTH_TOKEN='${CONFIGURED_OAUTH_TOKEN.replace(/'/g, "'\\''")}'`);
-  }
-  const body = envLines.join("\n");
-
   const params = new URLSearchParams();
   params.append("cmd", "bash");
   params.append("cmd", "-c");
   params.append(
     "cmd",
-    "cat > ~/.claude-env && chmod 600 ~/.claude-env && " +
-      "printf '%s' '" +
-      script.replace(/'/g, "'\\''") +
+    "printf '%s' '" +
+      SPRITE_WRAPPER_SCRIPT.replace(/'/g, "'\\''") +
       "' > ~/.claude-wrapper && chmod +x ~/.claude-wrapper",
   );
-  params.append("stdin", "true");
 
   const url = `${SPRITE_API}/v1/sprites/${encodeURIComponent(
     spriteName,
@@ -860,11 +852,7 @@ async function initSpriteSetup(spriteName) {
 
   const res = await fetch(url, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${SPRITE_TOKEN}`,
-      "Content-Type": "text/plain",
-    },
-    body,
+    headers: { Authorization: `Bearer ${SPRITE_TOKEN}` },
   });
   if (!res.ok) {
     throw new Error(`Failed to init sprite: ${await res.text()}`);
@@ -873,9 +861,10 @@ async function initSpriteSetup(spriteName) {
 
 async function cleanupSpriteAuth(spriteName) {
   const params = new URLSearchParams();
-  params.append("cmd", "bash");
-  params.append("cmd", "-c");
-  params.append("cmd", "rm -f ~/.claude-env ~/.claude-wrapper");
+  params.append("cmd", "rm");
+  params.append("cmd", "-f");
+  params.append("cmd", "/home/sprite/.claude-wrapper");
+  params.append("cmd", "/home/sprite/.claude-env");
 
   const url = `${SPRITE_API}/v1/sprites/${encodeURIComponent(
     spriteName,
@@ -885,45 +874,33 @@ async function cleanupSpriteAuth(spriteName) {
     method: "POST",
     headers: { Authorization: `Bearer ${SPRITE_TOKEN}` },
   }).catch((err) => {
-    console.warn(`Warning: failed to clean up sprite auth for ${spriteName}: ${err.message}`);
+    console.warn(`Warning: failed to clean up sprite for ${spriteName}: ${err.message}`);
   });
 }
 
 async function initSprites() {
-  // Clean stale auth from any previous crash before writing new credentials
-  console.log("Cleaning stale sprite auth...");
+  // Clean stale files from any previous crash
+  console.log("Cleaning stale sprite files...");
   await Promise.all(SPRITE_NAMES.map((name) => cleanupSpriteAuth(name)));
   console.log("Initializing sprites...");
   await Promise.all(SPRITE_NAMES.map((name) => initSpriteSetup(name)));
   console.log("Sprites ready.");
 }
 
-function buildSpriteAuthPrefix(clientToken) {
+// Build the POST body for sprite exec: env vars + blank line + prompt
+// Credentials flow via stdin (POST body), never in URLs or on disk
+function buildSpriteBody(clientToken, prompt) {
   const authEnv = buildAuthEnv(clientToken);
-  const parts = [];
+  const envLines = [];
   for (const [key, val] of Object.entries(authEnv)) {
-    if (val) parts.push(`${key}='${val.replace(/'/g, "'\\''")}'`);
+    if (val) envLines.push(`${key}=${val}`);
   }
-  return parts.join(" ");
+  return envLines.join("\n") + "\n\n" + prompt;
 }
 
-function appendSpriteCmd(params, clientToken) {
-  const authPrefix = buildSpriteAuthPrefix(clientToken);
-  if (authPrefix) {
-    // Inline auth env vars and exec claude directly
-    params.append("cmd", "bash");
-    params.append("cmd", "-c");
-    params.append("cmd", `${authPrefix} exec claude "$@"`);
-    params.append("cmd", "--");
-  } else {
-    // Fall back to wrapper (sources ~/.claude-env for server-side auth)
-    params.append("cmd", "/home/sprite/.claude-wrapper");
-  }
-}
-
-function buildSpriteExecUrl(spriteName, systemPrompt, clientToken) {
+function buildSpriteExecUrl(spriteName, systemPrompt) {
   const params = new URLSearchParams();
-  appendSpriteCmd(params, clientToken);
+  params.append("cmd", "/home/sprite/.claude-wrapper");
   params.append("cmd", "-p");
   params.append("cmd", "--max-turns");
   params.append("cmd", MAX_TURNS);
@@ -941,12 +918,11 @@ function buildSpriteExecUrl(spriteName, systemPrompt, clientToken) {
 
 async function runClaudeOnSprite(prompt, systemPrompt, clientToken) {
   const sprite = acquireSprite();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
   try {
-    const url = buildSpriteExecUrl(sprite.name, systemPrompt, clientToken);
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const url = buildSpriteExecUrl(sprite.name, systemPrompt);
 
     const response = await fetch(url, {
       method: "POST",
@@ -955,11 +931,9 @@ async function runClaudeOnSprite(prompt, systemPrompt, clientToken) {
         "Content-Type": "text/plain",
         Accept: "application/json",
       },
-      body: prompt,
+      body: buildSpriteBody(clientToken, prompt),
       signal: controller.signal,
     });
-
-    clearTimeout(timer);
 
     if (!response.ok) {
       const errBody = await response.text();
@@ -982,18 +956,18 @@ async function runClaudeOnSprite(prompt, systemPrompt, clientToken) {
     const text = await response.text();
     return cleanOutput(text);
   } finally {
+    clearTimeout(timer);
     releaseSprite(sprite);
   }
 }
 
 async function runClaudeSpriteStreaming(prompt, systemPrompt, onChunk, clientToken) {
   const sprite = acquireSprite();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
   try {
-    const url = buildSpriteExecUrl(sprite.name, systemPrompt, clientToken);
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const url = buildSpriteExecUrl(sprite.name, systemPrompt);
 
     const response = await fetch(url, {
       method: "POST",
@@ -1002,11 +976,9 @@ async function runClaudeSpriteStreaming(prompt, systemPrompt, onChunk, clientTok
         "Content-Type": "text/plain",
         Accept: "application/json",
       },
-      body: prompt,
+      body: buildSpriteBody(clientToken, prompt),
       signal: controller.signal,
     });
-
-    clearTimeout(timer);
 
     if (!response.ok) {
       const errBody = await response.text();
@@ -1038,6 +1010,7 @@ async function runClaudeSpriteStreaming(prompt, systemPrompt, onChunk, clientTok
       }
     }
   } finally {
+    clearTimeout(timer);
     releaseSprite(sprite);
   }
 }
@@ -1048,7 +1021,7 @@ async function runClaudeSpriteStreaming(prompt, systemPrompt, onChunk, clientTok
 function buildSpriteAgentExecUrl(spriteName, opts) {
   const cliArgs = buildAgentCliArgs(opts);
   const params = new URLSearchParams();
-  appendSpriteCmd(params, opts.clientToken);
+  params.append("cmd", "/home/sprite/.claude-wrapper");
   for (const arg of cliArgs) {
     params.append("cmd", arg);
   }
@@ -1065,6 +1038,7 @@ async function runAgentOnSprite(prompt, opts, onEvent) {
     sprite = spritePool.find((s) => s.name === spriteName);
     if (sprite) {
       sprite.busy++;
+      sessionTimestamps.set(opts.sessionId, Date.now()); // refresh TTL
     } else {
       sprite = acquireSprite();
     }
@@ -1072,16 +1046,17 @@ async function runAgentOnSprite(prompt, opts, onEvent) {
     sprite = acquireSprite();
   }
 
+  const controller = new AbortController();
+  const timeout = opts.timeoutMs || AGENT_TIMEOUT_MS;
+  const timer = setTimeout(() => controller.abort(), timeout);
+
+  // Abort on client disconnect
+  if (opts.abortSignal) {
+    opts.abortSignal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
+
   try {
     const url = buildSpriteAgentExecUrl(sprite.name, opts);
-    const controller = new AbortController();
-    const timeout = opts.timeoutMs || AGENT_TIMEOUT_MS;
-    const timer = setTimeout(() => controller.abort(), timeout);
-
-    // Abort on client disconnect
-    if (opts.abortSignal) {
-      opts.abortSignal.addEventListener("abort", () => controller.abort(), { once: true });
-    }
 
     const response = await fetch(url, {
       method: "POST",
@@ -1090,11 +1065,9 @@ async function runAgentOnSprite(prompt, opts, onEvent) {
         "Content-Type": "text/plain",
         Accept: "application/json",
       },
-      body: prompt,
+      body: buildSpriteBody(opts.clientToken, prompt),
       signal: controller.signal,
     });
-
-    clearTimeout(timer);
 
     if (!response.ok) {
       throw new Error(`Sprite agent exec failed (${response.status}): ${await response.text()}`);
@@ -1143,6 +1116,7 @@ async function runAgentOnSprite(prompt, opts, onEvent) {
       }
     }
   } finally {
+    clearTimeout(timer);
     releaseSprite(sprite);
   }
 }
@@ -1208,7 +1182,7 @@ async function initVercelPool() {
 function buildVercelClaudeArgs(prompt, systemPrompt) {
   const cmdArgs = ["-p", "--max-turns", MAX_TURNS, "--output-format", "text"];
   if (systemPrompt) cmdArgs.push("--system-prompt", systemPrompt);
-  cmdArgs.push(prompt);
+  cmdArgs.push("--", prompt); // -- prevents prompt from being parsed as a flag
   return cmdArgs;
 }
 
@@ -1280,6 +1254,7 @@ async function replaceVercelSandbox(sandbox) {
   // Mutex: if already being replaced, wait for the existing replacement
   if (sandbox.replacing) {
     await sandbox._replacePromise;
+    if (sandbox.dead) throw new Error("Sandbox replacement failed permanently");
     return;
   }
   sandbox.replacing = true;
@@ -1289,7 +1264,12 @@ async function replaceVercelSandbox(sandbox) {
     try {
       const newSbx = await createVercelSandbox();
       sandbox.id = newSbx.id;
+      sandbox.dead = false;
       console.log(`Replaced with ${newSbx.id}`);
+    } catch (err) {
+      sandbox.dead = true;
+      console.error(`Failed to replace sandbox: ${err.message}`);
+      throw err;
     } finally {
       sandbox.replacing = false;
       sandbox._replacePromise = null;
@@ -1394,6 +1374,7 @@ async function runAgentOnVercel(prompt, opts, onEvent) {
     sandbox = vercelPool.find((s) => s.id === sandboxId && !s.replacing);
     if (sandbox) {
       sandbox.busy++;
+      sessionTimestamps.set(opts.sessionId, Date.now()); // refresh TTL
     } else {
       sessionToSandbox.delete(opts.sessionId);
       sandbox = acquireVercelSandbox();
@@ -1404,7 +1385,7 @@ async function runAgentOnVercel(prompt, opts, onEvent) {
 
   try {
     const cliArgs = buildAgentCliArgs(opts);
-    cliArgs.push(prompt); // prompt as positional arg
+    cliArgs.push("--", prompt); // -- prevents prompt from being parsed as a flag
     const env = buildAuthEnv(opts.clientToken);
 
     let cmdId;
