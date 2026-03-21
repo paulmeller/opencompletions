@@ -86,11 +86,13 @@ const MODEL_NAME = "claude-code";
 // Backend config
 const BACKEND = flag("backend", "local"); // "local", "sprite", or "vercel"
 const CLI_NAME = flag("cli", "claude"); // "claude" or "opencode"
-const ANTHROPIC_API_KEY_CFG = flag(
+// Auth config: --anthropic-api-key → ANTHROPIC_API_KEY env var (priority)
+//              --claude-token → CLAUDE_CODE_OAUTH_TOKEN env var (fallback)
+const CONFIGURED_API_KEY = flag(
   "anthropic-api-key",
   process.env.ANTHROPIC_API_KEY || "",
 );
-const CLAUDE_OAUTH_TOKEN_CFG = flag(
+const CONFIGURED_OAUTH_TOKEN = flag(
   "claude-token",
   process.env.CLAUDE_CODE_OAUTH_TOKEN || "",
 );
@@ -207,7 +209,7 @@ if (CLI_NAME === "opencode" && BACKEND !== "local") {
   console.error("Error: --cli opencode only supports --backend local");
   process.exit(1);
 }
-if (CLI_NAME === "opencode" && CLAUDE_OAUTH_TOKEN_CFG && !ANTHROPIC_API_KEY_CFG) {
+if (CLI_NAME === "opencode" && CONFIGURED_OAUTH_TOKEN && !CONFIGURED_API_KEY) {
   console.warn(
     "WARNING: CLAUDE_CODE_OAUTH_TOKEN is set but cannot be used with opencode per Anthropic ToS. " +
     "Set ANTHROPIC_API_KEY or use --anthropic-api-key instead.",
@@ -353,15 +355,13 @@ function drain() {
 // Auth env helper – resolve per-request token with server fallback
 // ---------------------------------------------------------------------------
 function buildAuthEnv(clientToken) {
-  const env = {};
-  // Per-request Anthropic API key takes priority
-  const apiKey = clientToken || ANTHROPIC_API_KEY_CFG;
+  // Start clean — only set the auth vars we intend, inheriting nothing
+  const env = { ANTHROPIC_API_KEY: "", CLAUDE_CODE_OAUTH_TOKEN: "" };
+  const apiKey = clientToken || CONFIGURED_API_KEY;
   if (apiKey) {
     env.ANTHROPIC_API_KEY = apiKey;
-    env.CLAUDE_CODE_OAUTH_TOKEN = ""; // clear to avoid ambiguity
-  } else if (CLAUDE_OAUTH_TOKEN_CFG) {
-    env.CLAUDE_CODE_OAUTH_TOKEN = CLAUDE_OAUTH_TOKEN_CFG;
-    env.ANTHROPIC_API_KEY = ""; // clear to avoid ambiguity
+  } else if (CONFIGURED_OAUTH_TOKEN) {
+    env.CLAUDE_CODE_OAUTH_TOKEN = CONFIGURED_OAUTH_TOKEN;
   }
   return env;
 }
@@ -526,12 +526,12 @@ const opencodeProvider = {
   },
   buildAuthEnv(clientToken) {
     const env = {};
-    const apiKey = clientToken || ANTHROPIC_API_KEY_CFG;
+    const apiKey = clientToken || CONFIGURED_API_KEY;
     if (apiKey) {
       env.ANTHROPIC_API_KEY = apiKey;
     }
     // Never forward OAuth tokens to opencode per Anthropic ToS
-    if (CLAUDE_OAUTH_TOKEN_CFG && !apiKey) {
+    if (CONFIGURED_OAUTH_TOKEN && !apiKey) {
       console.warn("Warning: Claude OAuth token cannot be used with opencode — set ANTHROPIC_API_KEY instead");
     }
     return env;
@@ -794,14 +794,14 @@ function runAgentLocal(prompt, opts, onEvent) {
     proc.on("close", (code) => {
       clearTimeout(timer);
       activeProcesses.delete(proc);
-      // Flush remaining buffer
+      if (settled) return;
+      // Flush remaining buffer only if not already settled (e.g. by timeout)
       if (buffer.trim()) {
         try {
           const translated = translate(JSON.parse(buffer.trim()));
           if (translated) onEvent(translated);
         } catch {}
       }
-      if (settled) return;
       settled = true;
       if (code === 0) resolve();
       else reject(new Error(stderr || `${CLI.errorLabel} agent exited with code ${code}`));
@@ -834,11 +834,11 @@ async function initSpriteSetup(spriteName) {
   ].join("\n");
 
   const envLines = [];
-  if (ANTHROPIC_API_KEY_CFG) {
-    envLines.push(`ANTHROPIC_API_KEY='${ANTHROPIC_API_KEY_CFG.replace(/'/g, "'\\''")}'`);
+  if (CONFIGURED_API_KEY) {
+    envLines.push(`ANTHROPIC_API_KEY='${CONFIGURED_API_KEY.replace(/'/g, "'\\''")}'`);
   }
-  if (CLAUDE_OAUTH_TOKEN_CFG) {
-    envLines.push(`CLAUDE_CODE_OAUTH_TOKEN='${CLAUDE_OAUTH_TOKEN_CFG.replace(/'/g, "'\\''")}'`);
+  if (CONFIGURED_OAUTH_TOKEN) {
+    envLines.push(`CLAUDE_CODE_OAUTH_TOKEN='${CONFIGURED_OAUTH_TOKEN.replace(/'/g, "'\\''")}'`);
   }
   const body = envLines.join("\n");
 
@@ -884,10 +884,15 @@ async function cleanupSpriteAuth(spriteName) {
   await fetch(url, {
     method: "POST",
     headers: { Authorization: `Bearer ${SPRITE_TOKEN}` },
-  }).catch(() => {});
+  }).catch((err) => {
+    console.warn(`Warning: failed to clean up sprite auth for ${spriteName}: ${err.message}`);
+  });
 }
 
 async function initSprites() {
+  // Clean stale auth from any previous crash before writing new credentials
+  console.log("Cleaning stale sprite auth...");
+  await Promise.all(SPRITE_NAMES.map((name) => cleanupSpriteAuth(name)));
   console.log("Initializing sprites...");
   await Promise.all(SPRITE_NAMES.map((name) => initSpriteSetup(name)));
   console.log("Sprites ready.");
@@ -1191,10 +1196,6 @@ function buildVercelClaudeArgs(prompt, systemPrompt) {
   return cmdArgs;
 }
 
-function buildVercelEnv(clientToken) {
-  return buildAuthEnv(clientToken);
-}
-
 async function vercelExec(sandboxId, cmdArgs, env) {
   const res = await fetch(vercelUrl(`/v1/sandboxes/${sandboxId}/cmd`), {
     method: "POST",
@@ -1285,7 +1286,7 @@ async function runClaudeOnVercel(prompt, systemPrompt, clientToken) {
   const sandbox = acquireVercelSandbox();
   try {
     const cmdArgs = buildVercelClaudeArgs(prompt, systemPrompt);
-    const env = buildVercelEnv(clientToken);
+    const env = buildAuthEnv(clientToken);
     let cmdId;
     try {
       cmdId = await vercelExec(sandbox.id, cmdArgs, env);
@@ -1328,7 +1329,7 @@ async function runClaudeVercelStreaming(prompt, systemPrompt, onChunk, clientTok
   const sandbox = acquireVercelSandbox();
   try {
     const cmdArgs = buildVercelClaudeArgs(prompt, systemPrompt);
-    const env = buildVercelEnv(clientToken);
+    const env = buildAuthEnv(clientToken);
     let cmdId;
     try {
       cmdId = await vercelExec(sandbox.id, cmdArgs, env);
@@ -1388,7 +1389,7 @@ async function runAgentOnVercel(prompt, opts, onEvent) {
   try {
     const cliArgs = buildAgentCliArgs(opts);
     cliArgs.push(prompt); // prompt as positional arg
-    const env = buildVercelEnv(opts.clientToken);
+    const env = buildAuthEnv(opts.clientToken);
 
     let cmdId;
     try {
@@ -1659,10 +1660,12 @@ async function handleResponsesStream(
     part: { type: "output_text", text: "" },
   });
 
+  let fullText = "";
   try {
     await enqueue(prompt, systemPrompt, {
       token: clientToken,
       onChunk: (text) => {
+        fullText += text;
         sseEvent(res, "response.output_text.delta", {
           type: "response.output_text.delta",
           output_index: 0,
@@ -1677,7 +1680,7 @@ async function handleResponsesStream(
       type: "response.content_part.done",
       output_index: 0,
       content_index: 0,
-      part: { type: "output_text", text: "" },
+      part: { type: "output_text", text: fullText },
     });
 
     // output_item.done
@@ -1686,7 +1689,7 @@ async function handleResponsesStream(
       output_index: 0,
       item: {
         type: "message", id: msgId, role: "assistant",
-        status: "completed", content: [{ type: "output_text", text: "" }],
+        status: "completed", content: [{ type: "output_text", text: fullText }],
       },
     });
 
@@ -1697,7 +1700,7 @@ async function handleResponsesStream(
         id: respId, object: "response", created_at: created, model: m,
         status: "completed", output: [{
           type: "message", id: msgId, role: "assistant",
-          status: "completed", content: [{ type: "output_text", text: "" }],
+          status: "completed", content: [{ type: "output_text", text: fullText }],
         }],
         usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
       },
@@ -2113,7 +2116,14 @@ const server = http.createServer(async (req, res) => {
     );
   };
 
-  if (req.method === "OPTIONS") return sendJSON(204, {});
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "*",
+      "Access-Control-Allow-Methods": "*",
+    });
+    return res.end();
+  }
 
   // Public routes (no auth required)
   const publicUrl = req.url.split("?")[0];
@@ -2133,24 +2143,14 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // Extract bearer token from Authorization header or Anthropic x-api-key header
+  // Extract auth: Bearer token for server auth, x-api-key for backend forwarding
   const authHeader = req.headers.authorization || "";
   const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
   const xApiKey = req.headers["x-api-key"] || "";
-  const clientToken = bearerToken || xApiKey;
-
-  // Auth check: API key is always required when configured.
-  // Anthropic keys (sk-ant-*) are additionally forwarded to the backend.
-  const MIN_ANTHROPIC_KEY_LEN = 20;
-  const isAnthropicKey =
-    clientToken.length >= MIN_ANTHROPIC_KEY_LEN &&
-    (clientToken.startsWith("sk-ant-api") || clientToken.startsWith("sk-ant-oat"));
 
   if (API_KEY) {
-    // When an Anthropic key is sent, check it via x-api-key or a second header;
-    // the bearer token must still match the server API key.
-    const keyToCheck = isAnthropicKey && xApiKey ? bearerToken : clientToken;
-    const a = Buffer.from(keyToCheck);
+    // Bearer token must match the server API key
+    const a = Buffer.from(bearerToken || xApiKey);
     const b = Buffer.from(API_KEY);
     if (a.length !== b.length || !timingSafeEqual(a, b)) {
       return sendJSON(401, {
@@ -2163,8 +2163,8 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // Forward Anthropic keys to the backend for downstream auth
-  const forwardToken = isAnthropicKey ? clientToken : null;
+  // x-api-key is forwarded to the backend as the provider token (any provider)
+  const forwardToken = xApiKey || null;
 
   let url = req.url.split("?")[0];
 
