@@ -2290,6 +2290,7 @@ async function start() {
 ║    GET  /v1/models                (Model list)           ║
 ║    GET  /v1/models/:id            (Model detail)         ║
 ║    GET  /v1/status                (Queue status)         ║
+║    GET  /openapi.json             (OpenAPI spec)         ║
 ║    GET  /                         (Health check)         ║
 ║    * /v1/ prefix optional on all routes                  ║
 ║                                                          ║
