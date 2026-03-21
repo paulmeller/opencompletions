@@ -335,6 +335,7 @@ curl -N http://localhost:3456/v1/agent \
 |--------------------|--------------------------------|
 | `GET /`            | Health check + server info     |
 | `GET /openapi.json`| OpenAPI 3.1 specification      |
+| `GET /docs`        | Interactive API docs (Scalar)  |
 | `GET /v1/status`   | Queue depth + worker status    |
 
 ## Using with SDKs
