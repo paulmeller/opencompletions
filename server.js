@@ -2161,7 +2161,10 @@ const server = http.createServer(async (req, res) => {
   <div id="app"></div>
   <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
   <script>
-    Scalar.createApiReference('#app', { url: '/openapi.json' })
+    Scalar.createApiReference('#app', {
+      url: '/openapi.json',
+      download: 'direct'
+    })
   </script>
 </body>
 </html>`);
