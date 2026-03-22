@@ -16,7 +16,8 @@
   ],
   "security": [
     {
-      "BearerAuth": []
+      "BearerAuth": [],
+      "ProviderKey": []
     }
   ],
   "paths": {
