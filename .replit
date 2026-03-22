@@ -1,4 +1,4 @@
-run = "node server.js --backend sprite --sprite-token \"$SPRITE_TOKEN\" --sprite-name \"$SPRITE_NAME\" ${CLAUDE_CODE_OAUTH_TOKEN:+--claude-token \"$CLAUDE_CODE_OAUTH_TOKEN\"} --api-key \"$API_KEY\""
+run = "node server.js --backend sprite --sprite-token \"$SPRITE_TOKEN\" --sprite-name \"$SPRITE_NAME\" ${CLAUDE_CODE_OAUTH_TOKEN:+--claude-token \"$CLAUDE_CODE_OAUTH_TOKEN\"} --api-key \"$API_KEY\" --skills-path skills"
 language = "nodejs"
 entrypoint = "server.js"
 modules = ["nodejs-20"]
@@ -7,7 +7,7 @@ modules = ["nodejs-20"]
 run = [
   "sh",
   "-c",
-  "node server.js --backend sprite --sprite-token $SPRITE_TOKEN --sprite-name $SPRITE_NAME ${CLAUDE_CODE_OAUTH_TOKEN:+--claude-token $CLAUDE_CODE_OAUTH_TOKEN} --api-key $API_KEY --port 3000",
+  "node server.js --backend sprite --sprite-token $SPRITE_TOKEN --sprite-name $SPRITE_NAME ${CLAUDE_CODE_OAUTH_TOKEN:+--claude-token $CLAUDE_CODE_OAUTH_TOKEN} --api-key $API_KEY --skills-path skills --port 3000",
 ]
 deploymentTarget = "autoscale"
 
@@ -42,5 +42,5 @@ outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "node server.js --backend sprite --sprite-token \"$SPRITE_TOKEN\" --sprite-name \"$SPRITE_NAME\" ${CLAUDE_CODE_OAUTH_TOKEN:+--claude-token \"$CLAUDE_CODE_OAUTH_TOKEN\"} --api-key \"$API_KEY\" --port 3000"
+args = "node server.js --backend sprite --sprite-token \"$SPRITE_TOKEN\" --sprite-name \"$SPRITE_NAME\" ${CLAUDE_CODE_OAUTH_TOKEN:+--claude-token \"$CLAUDE_CODE_OAUTH_TOKEN\"} --api-key \"$API_KEY\" --skills-path skills --port 3000"
 waitForPort = 3000
