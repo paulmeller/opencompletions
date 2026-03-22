@@ -10,6 +10,10 @@
   },
   "servers": [
     {
+      "url": "https://api.opencompletions.com",
+      "description": "Production server"
+    },
+    {
       "url": "http://localhost:3456",
       "description": "Local development server"
     }
