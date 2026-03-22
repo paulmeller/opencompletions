@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "OpenCompletions API",
-    "description": "A lightweight server wrapping AI coding CLIs as a completions and agent API, with OpenAI-compatible, Anthropic-compatible, and multi-turn Agent endpoints. Supports multiple CLI backends (`--cli claude|opencode`), multiple execution backends (local, sprite, vercel), and per-request auth token forwarding via the `x-api-key` header.",
+    "description": "A lightweight server wrapping AI coding CLIs as a completions and agent API, with OpenAI-compatible, Anthropic-compatible, and multi-turn Agent endpoints. Supports multiple CLI backends (`--cli claude|opencode`), multiple execution backends (local, sprite, vercel).\n\n**Authentication** uses two layers: a `Bearer` token authenticates the client to the server (configured via `--api-key`), while the `x-api-key` header forwards the provider auth token (e.g. Anthropic API key) to the CLI backend. Completion and agent endpoints require both; utility and model endpoints require only Bearer or no auth.",
     "version": "1.0.0",
     "license": {
       "name": "MIT"
@@ -14,18 +14,13 @@
       "description": "Production server"
     }
   ],
-  "security": [
-    {
-      "BearerAuth": [],
-      "ProviderKey": []
-    }
-  ],
   "paths": {
     "/": {
       "get": {
         "operationId": "healthCheck",
         "summary": "Health check and server info",
         "tags": ["Utility"],
+        "security": [],
         "responses": {
           "200": {
             "description": "Server status and configuration",
@@ -45,6 +40,7 @@
         "operationId": "listModels",
         "summary": "List available models",
         "tags": ["OpenAI-Compatible"],
+        "security": [{ "BearerAuth": [] }],
         "responses": {
           "200": {
             "description": "Model list",
@@ -64,6 +60,7 @@
         "operationId": "getModel",
         "summary": "Get model details",
         "tags": ["OpenAI-Compatible"],
+        "security": [{ "BearerAuth": [] }],
         "parameters": [
           {
             "name": "model_id",
@@ -103,6 +100,7 @@
         "operationId": "createChatCompletion",
         "summary": "Create a chat completion (OpenAI-compatible)",
         "tags": ["OpenAI-Compatible"],
+        "security": [{ "BearerAuth": [], "ProviderKey": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -147,6 +145,7 @@
         "operationId": "createCompletion",
         "summary": "Create a text completion (OpenAI-compatible)",
         "tags": ["OpenAI-Compatible"],
+        "security": [{ "BearerAuth": [], "ProviderKey": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -191,6 +190,7 @@
         "operationId": "createMessage",
         "summary": "Create a message (Anthropic-compatible)",
         "tags": ["Anthropic-Compatible"],
+        "security": [{ "BearerAuth": [], "ProviderKey": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -236,6 +236,7 @@
         "operationId": "countTokens",
         "summary": "Estimate token count (Anthropic-compatible)",
         "tags": ["Anthropic-Compatible"],
+        "security": [{ "BearerAuth": [], "ProviderKey": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -273,6 +274,7 @@
         "summary": "Create embeddings (stub)",
         "description": "Returns deterministic hash-based pseudo-embeddings (1536 dimensions). These are NOT semantically meaningful — they exist for SDK compatibility with tools like Continue.dev and LangChain that expect this endpoint. Use a real embedding provider for semantic search.",
         "tags": ["OpenAI-Compatible"],
+        "security": [{ "BearerAuth": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -313,6 +315,7 @@
         "summary": "Create a response (OpenAI Responses API)",
         "description": "OpenAI's new unified API format. Accepts `input` (string or message array) and optional `instructions` (system prompt). Supports streaming.",
         "tags": ["OpenAI-Compatible"],
+        "security": [{ "BearerAuth": [], "ProviderKey": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -359,6 +362,7 @@
         "summary": "Run a multi-turn agent with tool use",
         "description": "Starts an autonomous agent that can use tools (Read, Edit, Bash, etc.) across multiple turns. Streams Claude Code's NDJSON events as SSE by default. Supports session resumption, tool restrictions, MCP servers, and budget caps. Note: when the server is started with `--cli opencode`, the fields `allowed_tools`, `disallowed_tools`, `max_budget_usd`, and `mcp_servers` are not supported and will return 400 errors if provided.",
         "tags": ["Agent"],
+        "security": [{ "BearerAuth": [], "ProviderKey": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -418,6 +422,7 @@
         "operationId": "getStatus",
         "summary": "Queue and worker status",
         "tags": ["Utility"],
+        "security": [],
         "responses": {
           "200": {
             "description": "Current queue depth and worker status",
