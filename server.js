@@ -38,8 +38,10 @@
  */
 
 const http = require("http");
+const path = require("path");
 const { spawn } = require("child_process");
 const { randomUUID, timingSafeEqual, createHash } = require("crypto");
+const files = require("./files");
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing
@@ -80,7 +82,14 @@ const MAX_TURNS = flag("max-turns", "1");
 const AGENT_MAX_TURNS = parseInt(flag("agent-max-turns", "10"), 10);
 const AGENT_TIMEOUT_MS = parseInt(flag("agent-timeout", "600000"), 10); // 10 min
 const AGENT_MCP_CONFIG = flag("agent-mcp-config", ""); // operator default MCP
+const SKILLS_PATH = flag("skills-path", "");
+const SKILLS_SCRIPTS_ENABLED = args.includes("--skills-scripts");
+const resolvedSkillsPath = SKILLS_PATH ? path.resolve(SKILLS_PATH) : "";
+const skillsModule = SKILLS_PATH ? require("./skills") : null;
 const API_KEY = flag("api-key", process.env.API_KEY || "");
+const MAX_FILE_SIZE = parseInt(flag("max-file-size", String(50 * 1024 * 1024)), 10);
+const MAX_WORKSPACE_SIZE = parseInt(flag("max-workspace-size", String(200 * 1024 * 1024)), 10);
+const WORKSPACE_TTL_MS = parseInt(flag("workspace-ttl", "3600000"), 10);
 const MODEL_NAME = "claude-code";
 
 // Backend config
@@ -131,6 +140,10 @@ const vercelPool = [];
 // Agent session affinity
 const sessionToSprite = new Map();  // session_id → sprite name
 const sessionToSandbox = new Map(); // session_id → sandbox id
+
+// Workspace-to-backend binding (eager allocation)
+const workspaceToSprite = new Map();  // workspace_id → sprite name
+const workspaceToSandbox = new Map(); // workspace_id → sandbox id
 
 // Evict stale session mappings every 30 minutes
 const SESSION_TTL_MS = 60 * 60 * 1000; // 1 hour
@@ -416,7 +429,20 @@ function buildAgentCliArgs(opts) {
     cliArgs.push("--include-partial-messages");
   }
 
-  // MCP config: merge operator defaults with per-request
+  // MCP config: merge operator defaults with per-request (Claude uses --mcp-config flag)
+  const mcpConfig = mergeAgentMcpConfig(opts);
+  if (Object.keys(mcpConfig).length > 0) {
+    cliArgs.push("--mcp-config", JSON.stringify({ mcpServers: mcpConfig }));
+  }
+
+  return cliArgs;
+}
+
+/**
+ * Merge operator-default and per-request MCP server configs.
+ * Returns a plain object of server definitions (keyed by server name).
+ */
+function mergeAgentMcpConfig(opts) {
   const mcpConfig = {};
   if (AGENT_MCP_CONFIG) {
     try {
@@ -428,11 +454,31 @@ function buildAgentCliArgs(opts) {
   if (opts.mcpServers && typeof opts.mcpServers === "object") {
     Object.assign(mcpConfig, opts.mcpServers);
   }
-  if (Object.keys(mcpConfig).length > 0) {
-    cliArgs.push("--mcp-config", JSON.stringify({ mcpServers: mcpConfig }));
-  }
+  return mcpConfig;
+}
 
-  return cliArgs;
+/**
+ * Convert a merged MCP config object to OpenCode's format for OPENCODE_CONFIG_CONTENT.
+ * Maps: "stdio" → "local", "http"/"sse" → "remote", preserving other fields.
+ */
+function mcpConfigToOpenCode(mcpConfig) {
+  const mcp = {};
+  for (const [name, server] of Object.entries(mcpConfig)) {
+    const entry = { ...server };
+    // Map transport types: Claude → OpenCode
+    if (entry.type === "stdio") {
+      entry.type = "local";
+      // stdio uses "command" (string) + "args" (array) → opencode uses "command" (array)
+      if (typeof entry.command === "string") {
+        entry.command = [entry.command, ...(entry.args || [])];
+      }
+      delete entry.args;
+    } else if (entry.type === "http" || entry.type === "sse") {
+      entry.type = "remote";
+    }
+    mcp[name] = entry;
+  }
+  return mcp;
 }
 
 // ---------------------------------------------------------------------------
@@ -502,6 +548,7 @@ const claudeProvider = {
     return buildAgentCliArgs(opts);
   },
   buildAuthEnv: buildAuthEnv,
+  buildMcpEnv() { return {}; }, // Claude uses --mcp-config CLI arg
   wrapPrompt(prompt) {
     return prompt;
   },
@@ -540,6 +587,12 @@ const opencodeProvider = {
       console.warn("Warning: Claude OAuth token cannot be used with opencode — set ANTHROPIC_API_KEY instead");
     }
     return env;
+  },
+  buildMcpEnv(opts) {
+    const mcpConfig = mergeAgentMcpConfig(opts);
+    if (Object.keys(mcpConfig).length === 0) return {};
+    const opencodeMcp = mcpConfigToOpenCode(mcpConfig);
+    return { OPENCODE_CONFIG_CONTENT: JSON.stringify({ mcp: opencodeMcp }) };
   },
   wrapPrompt(prompt, systemPrompt) {
     if (!systemPrompt) return prompt;
@@ -746,9 +799,13 @@ function runAgentLocal(prompt, opts, onEvent) {
   return new Promise((resolve, reject) => {
     const cliArgs = CLI.buildAgentArgs(opts);
     if (!CLI.promptViaStdin) cliArgs.push(CLI.wrapPrompt(prompt, opts.systemPrompt));
-    const env = { ...process.env, ...CLI.buildAuthEnv(opts.clientToken) };
+    const env = { ...process.env, ...CLI.buildAuthEnv(opts.clientToken), ...CLI.buildMcpEnv(opts) };
     const spawnOpts = { stdio: ["pipe", "pipe", "pipe"], env };
-    if (opts.cwd) spawnOpts.cwd = opts.cwd;
+    if (opts.workspaceCwd && BACKEND === "local") {
+      spawnOpts.cwd = opts.workspaceCwd;
+    } else if (opts.cwd) {
+      spawnOpts.cwd = opts.cwd;
+    }
 
     const proc = spawn(CLI.command, cliArgs, spawnOpts);
     activeProcesses.add(proc);
@@ -894,8 +951,8 @@ async function initSprites() {
 
 // Build the POST body for sprite exec: env vars + blank line + prompt
 // Credentials flow via stdin (POST body), never in URLs or on disk
-function buildSpriteBody(clientToken, prompt) {
-  const authEnv = buildAuthEnv(clientToken);
+function buildSpriteBody(clientToken, prompt, extraEnv) {
+  const authEnv = { ...buildAuthEnv(clientToken), ...extraEnv };
   const envLines = [];
   for (const [key, val] of Object.entries(authEnv)) {
     if (val) envLines.push(`${key}=${val}`);
@@ -1023,12 +1080,21 @@ async function runClaudeSpriteStreaming(prompt, systemPrompt, onChunk, clientTok
 // ---------------------------------------------------------------------------
 // Backend: Sprite agent exec
 // ---------------------------------------------------------------------------
-function buildSpriteAgentExecUrl(spriteName, opts) {
+function buildSpriteAgentExecUrl(spriteName, opts, remoteCwd) {
   const cliArgs = buildAgentCliArgs(opts);
   const params = new URLSearchParams();
-  params.append("cmd", "/home/sprite/.claude-wrapper");
-  for (const arg of cliArgs) {
-    params.append("cmd", arg);
+
+  if (remoteCwd) {
+    // Wrap in bash -c to cd into workspace directory first
+    params.append("cmd", "bash");
+    params.append("cmd", "-c");
+    const escapedArgs = cliArgs.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ");
+    params.append("cmd", `cd ${remoteCwd} && /home/sprite/.claude-wrapper ${escapedArgs}`);
+  } else {
+    params.append("cmd", "/home/sprite/.claude-wrapper");
+    for (const arg of cliArgs) {
+      params.append("cmd", arg);
+    }
   }
   params.append("stdin", "true");
   return `${SPRITE_API}/v1/sprites/${encodeURIComponent(spriteName)}/exec?${params.toString()}`;
@@ -1036,9 +1102,14 @@ function buildSpriteAgentExecUrl(spriteName, opts) {
 
 async function runAgentOnSprite(prompt, opts, onEvent) {
 
-  // Session affinity: if resuming, try to use the same sprite
+  // Workspace binding takes priority, then session affinity, then acquire
   let sprite;
-  if (opts.sessionId && sessionToSprite.has(opts.sessionId)) {
+  if (opts.workspaceId && workspaceToSprite.has(opts.workspaceId)) {
+    const spriteName = workspaceToSprite.get(opts.workspaceId);
+    sprite = spritePool.find((s) => s.name === spriteName);
+    if (!sprite) sprite = acquireSprite();
+    else sprite.busy++;
+  } else if (opts.sessionId && sessionToSprite.has(opts.sessionId)) {
     const spriteName = sessionToSprite.get(opts.sessionId);
     sprite = spritePool.find((s) => s.name === spriteName);
     if (sprite) {
@@ -1061,7 +1132,8 @@ async function runAgentOnSprite(prompt, opts, onEvent) {
   }
 
   try {
-    const url = buildSpriteAgentExecUrl(sprite.name, opts);
+    const remoteCwd = opts.workspaceCwd || null;
+    const url = buildSpriteAgentExecUrl(sprite.name, opts, remoteCwd);
 
     const response = await fetch(url, {
       method: "POST",
@@ -1070,7 +1142,7 @@ async function runAgentOnSprite(prompt, opts, onEvent) {
         "Content-Type": "text/plain",
         Accept: "application/json",
       },
-      body: buildSpriteBody(opts.clientToken, prompt),
+      body: buildSpriteBody(opts.clientToken, prompt, CLI.buildMcpEnv(opts)),
       signal: controller.signal,
     });
 
@@ -1191,11 +1263,11 @@ function buildVercelClaudeArgs(prompt, systemPrompt) {
   return cmdArgs;
 }
 
-async function vercelExec(sandboxId, cmdArgs, env) {
+async function vercelExec(sandboxId, cmdArgs, env, command = "claude") {
   const res = await fetch(vercelUrl(`/v1/sandboxes/${sandboxId}/cmd`), {
     method: "POST",
     headers: vercelHeaders(),
-    body: JSON.stringify({ command: "claude", args: cmdArgs, env }),
+    body: JSON.stringify({ command, args: cmdArgs, env }),
   });
 
   if (!res.ok) throw new Error(`Vercel exec failed: ${await res.text()}`);
@@ -1262,10 +1334,18 @@ async function replaceVercelSandbox(sandbox) {
     if (sandbox.dead) throw new Error("Sandbox replacement failed permanently");
     return;
   }
+  const oldId = sandbox.id;
   sandbox.replacing = true;
   sandbox._replacePromise = (async () => {
-    console.log(`Replacing dead sandbox ${sandbox.id}...`);
-    await stopVercelSandbox(sandbox.id);
+    console.log(`Replacing dead sandbox ${oldId}...`);
+    // Mark any bound workspaces as error
+    for (const [wsId, sbxId] of workspaceToSandbox) {
+      if (sbxId === oldId) {
+        files.setWorkspaceState(wsId, "error");
+        workspaceToSandbox.delete(wsId);
+      }
+    }
+    await stopVercelSandbox(oldId);
     try {
       const newSbx = await createVercelSandbox();
       sandbox.id = newSbx.id;
@@ -1372,9 +1452,14 @@ async function runClaudeVercelStreaming(prompt, systemPrompt, onChunk, clientTok
 // Backend: Vercel agent exec
 // ---------------------------------------------------------------------------
 async function runAgentOnVercel(prompt, opts, onEvent) {
-  // Session affinity: if resuming, try to use the same sandbox
+  // Workspace binding takes priority, then session affinity, then acquire
   let sandbox;
-  if (opts.sessionId && sessionToSandbox.has(opts.sessionId)) {
+  if (opts.workspaceId && workspaceToSandbox.has(opts.workspaceId)) {
+    const sandboxId = workspaceToSandbox.get(opts.workspaceId);
+    sandbox = vercelPool.find((s) => s.id === sandboxId && !s.replacing);
+    if (!sandbox) sandbox = acquireVercelSandbox();
+    else sandbox.busy++;
+  } else if (opts.sessionId && sessionToSandbox.has(opts.sessionId)) {
     const sandboxId = sessionToSandbox.get(opts.sessionId);
     sandbox = vercelPool.find((s) => s.id === sandboxId && !s.replacing);
     if (sandbox) {
@@ -1391,11 +1476,20 @@ async function runAgentOnVercel(prompt, opts, onEvent) {
   try {
     const cliArgs = buildAgentCliArgs(opts);
     cliArgs.push("--", prompt); // -- prevents prompt from being parsed as a flag
-    const env = buildAuthEnv(opts.clientToken);
+    const env = { ...buildAuthEnv(opts.clientToken), ...CLI.buildMcpEnv(opts) };
+
+    // If workspace cwd, wrap in bash -c with cd
+    let execCommand = "claude";
+    let execArgs = cliArgs;
+    if (opts.workspaceCwd) {
+      const escapedArgs = cliArgs.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ");
+      execCommand = "bash";
+      execArgs = ["-c", `cd /vercel/sandbox/${opts.workspaceCwd} && claude ${escapedArgs}`];
+    }
 
     let cmdId;
     try {
-      cmdId = await vercelExec(sandbox.id, cliArgs, env);
+      cmdId = await vercelExec(sandbox.id, execArgs, env, execCommand);
     } catch (err) {
       if (
         err.message.includes("sandbox_stopped") ||
@@ -1406,7 +1500,7 @@ async function runAgentOnVercel(prompt, opts, onEvent) {
           if (sbxId === sandbox.id) sessionToSandbox.delete(sid);
         }
         await replaceVercelSandbox(sandbox);
-        cmdId = await vercelExec(sandbox.id, cliArgs, env);
+        cmdId = await vercelExec(sandbox.id, execArgs, env, execCommand);
       } else {
         throw err;
       }
@@ -1925,6 +2019,10 @@ async function handleAgentStream(req, res, start, prompt, agentOpts) {
       ...agentOpts,
       onEvent: (event) => {
         if (aborted) return;
+        // Inject workspace info into result events
+        if (event.type === "result" && agentOpts.workspaceId) {
+          event = { ...event, workspace_id: agentOpts.workspaceId };
+        }
         sseEvent(res, event.type || "message", event);
       },
     });
@@ -1986,14 +2084,18 @@ async function handleAgentBuffered(req, res, start, prompt, agentOpts, sendJSON)
       },
     });
 
-    sendJSON(200, {
+    const response = {
       session_id: sessionId,
       result: resultText,
       num_turns: numTurns,
       total_cost_usd: totalCostUsd,
       usage,
       events,
-    });
+    };
+    if (agentOpts.workspaceId) {
+      response.workspace_id = agentOpts.workspaceId;
+    }
+    sendJSON(200, response);
   } catch (err) {
     sendJSON(500, {
       error: { message: err.message, type: "server_error", code: 500 },
@@ -2029,6 +2131,44 @@ function parseBody(req) {
       } catch {
         reject(new Error("Invalid JSON"));
       }
+    });
+    req.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
+  });
+}
+
+/**
+ * Read raw request body as a Buffer. Never converts to string.
+ * Used exclusively by the file upload endpoint.
+ */
+function readRawBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let bytes = 0;
+    let settled = false;
+    req.on("data", (chunk) => {
+      bytes += chunk.length;
+      if (bytes > maxBytes) {
+        if (settled) return;
+        settled = true;
+        req.destroy();
+        reject(Object.assign(new Error(`File too large (max ${maxBytes} bytes)`), { code: 413 }));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      if (settled) return;
+      settled = true;
+      const buf = Buffer.concat(chunks);
+      if (buf.length === 0) {
+        reject(Object.assign(new Error("Empty body"), { code: 400 }));
+        return;
+      }
+      resolve(buf);
     });
     req.on("error", (err) => {
       if (settled) return;
@@ -2093,6 +2233,210 @@ function extractAnthropicPrompt(body) {
 }
 
 // ---------------------------------------------------------------------------
+// Built-in MCP Server (Streamable HTTP on /mcp)
+// ---------------------------------------------------------------------------
+const MCP_TOOLS = [
+  {
+    name: "echo",
+    description: "Echoes back the provided message. Useful for testing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        message: { type: "string", description: "The message to echo back" },
+      },
+      required: ["message"],
+    },
+  },
+  {
+    name: "random_number",
+    description: "Returns a random number between min and max (inclusive).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        min: { type: "number", description: "Minimum value (default 1)" },
+        max: { type: "number", description: "Maximum value (default 100)" },
+      },
+    },
+  },
+  {
+    name: "server_status",
+    description: "Returns the current OpenCompletions server status including queue depth and active workers.",
+    inputSchema: { type: "object", properties: {} },
+  },
+];
+
+const mcpSessions = new Map();
+
+async function handleMcpJsonRpc(msg) {
+  const { method, params, id } = msg;
+
+  switch (method) {
+    case "initialize":
+      return {
+        jsonrpc: "2.0",
+        id,
+        result: {
+          protocolVersion: "2024-11-05",
+          capabilities: { tools: {} },
+          serverInfo: { name: "opencompletions-mcp", version: "0.1.0" },
+        },
+      };
+
+    case "notifications/initialized":
+      return null;
+
+    case "tools/list": {
+      const allTools = skillsModule
+        ? [...MCP_TOOLS, ...skillsModule.getToolDefinitions(SKILLS_SCRIPTS_ENABLED)]
+        : MCP_TOOLS;
+      return { jsonrpc: "2.0", id, result: { tools: allTools } };
+    }
+
+    case "tools/call": {
+      const toolName = params?.name;
+      const args = params?.arguments || {};
+
+      if (toolName === "echo") {
+        return {
+          jsonrpc: "2.0",
+          id,
+          result: {
+            content: [{ type: "text", text: args.message || "(empty)" }],
+          },
+        };
+      }
+
+      if (toolName === "random_number") {
+        const min = args.min ?? 1;
+        const max = args.max ?? 100;
+        const value = Math.floor(Math.random() * (max - min + 1)) + min;
+        return {
+          jsonrpc: "2.0",
+          id,
+          result: { content: [{ type: "text", text: String(value) }] },
+        };
+      }
+
+      if (toolName === "server_status") {
+        const status = {
+          active_workers: activeWorkers,
+          queued: queue.length,
+          max_concurrency: MAX_CONCURRENCY,
+          cli: CLI.name,
+          backend: BACKEND,
+        };
+        return {
+          jsonrpc: "2.0",
+          id,
+          result: {
+            content: [{ type: "text", text: JSON.stringify(status, null, 2) }],
+          },
+        };
+      }
+
+      // Skills tools (when --skills-path is configured)
+      if (skillsModule) {
+        const result = await skillsModule.handleToolCall(toolName, args, resolvedSkillsPath, SKILLS_SCRIPTS_ENABLED);
+        if (result) return { jsonrpc: "2.0", id, result };
+      }
+
+      return {
+        jsonrpc: "2.0",
+        id,
+        error: { code: -32601, message: `Unknown tool: ${toolName}` },
+      };
+    }
+
+    default:
+      return {
+        jsonrpc: "2.0",
+        id,
+        error: { code: -32601, message: `Method not found: ${method}` },
+      };
+  }
+}
+
+function handleMcp(req, res, startTime) {
+  const corsHeaders = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, GET, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Mcp-Session-Id",
+    "Access-Control-Expose-Headers": "Mcp-Session-Id",
+  };
+
+  if (req.method === "DELETE") {
+    const sid = req.headers["mcp-session-id"];
+    if (sid) mcpSessions.delete(sid);
+    res.writeHead(200, corsHeaders);
+    res.end();
+    console.log(`${req.method} ${req.url} 200 ${Date.now() - startTime}ms`);
+    return;
+  }
+
+  if (req.method === "GET") {
+    res.writeHead(405, { ...corsHeaders, "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "SSE not supported" }));
+    return;
+  }
+
+  if (req.method !== "POST") {
+    res.writeHead(405, { ...corsHeaders, "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Method not allowed" }));
+    return;
+  }
+
+  let body = "";
+  req.on("data", (chunk) => (body += chunk));
+  req.on("end", async () => {
+    let msg;
+    try {
+      msg = JSON.parse(body);
+    } catch {
+      res.writeHead(400, { ...corsHeaders, "Content-Type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }));
+      return;
+    }
+
+    const isBatch = Array.isArray(msg);
+    const messages = isBatch ? msg : [msg];
+    const responses = [];
+
+    let sessionId = req.headers["mcp-session-id"];
+    const isInit = messages.some((m) => m.method === "initialize");
+
+    if (isInit) {
+      sessionId = randomUUID();
+      mcpSessions.set(sessionId, { created: Date.now() });
+    } else if (sessionId && !mcpSessions.has(sessionId)) {
+      res.writeHead(400, { ...corsHeaders, "Content-Type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32000, message: "Invalid session" } }));
+      return;
+    }
+
+    for (const m of messages) {
+      const response = await handleMcpJsonRpc(m);
+      if (response) responses.push(response);
+    }
+
+    if (responses.length === 0) {
+      res.writeHead(204, { ...corsHeaders, ...(sessionId ? { "Mcp-Session-Id": sessionId } : {}) });
+      res.end();
+      console.log(`${req.method} ${req.url} 204 ${Date.now() - startTime}ms`);
+      return;
+    }
+
+    const result = isBatch ? responses : responses[0];
+    res.writeHead(200, {
+      ...corsHeaders,
+      "Content-Type": "application/json",
+      ...(sessionId ? { "Mcp-Session-Id": sessionId } : {}),
+    });
+    res.end(JSON.stringify(result));
+    console.log(`${req.method} ${req.url} 200 ${Date.now() - startTime}ms`);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // HTTP Server
 // ---------------------------------------------------------------------------
 const server = http.createServer(async (req, res) => {
@@ -2111,6 +2455,7 @@ const server = http.createServer(async (req, res) => {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Headers": "*",
       "Access-Control-Allow-Methods": "*",
+      "Access-Control-Expose-Headers": "X-Workspace-Id",
     });
     res.end(json);
     console.log(
@@ -2123,6 +2468,7 @@ const server = http.createServer(async (req, res) => {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Headers": "*",
       "Access-Control-Allow-Methods": "*",
+      "Access-Control-Expose-Headers": "X-Workspace-Id",
     });
     return res.end();
   }
@@ -2268,16 +2614,60 @@ const server = http.createServer(async (req, res) => {
   // Many SDKs set base_url with or without /v1/, causing 404s
   const V1_ROUTES = [
     "/chat/completions", "/completions", "/models", "/messages",
-    "/messages/count_tokens", "/agent", "/embeddings", "/responses",
+    "/messages/count_tokens", "/agent", "/embeddings", "/responses", "/status",
+    "/files",
   ];
   for (const route of V1_ROUTES) {
-    if (url === route || (route === "/models" && url.startsWith("/models/"))) {
+    if (url === route || ((route === "/models" || route === "/files") && url.startsWith(route + "/"))) {
       url = `/v1${url}`;
       break;
     }
   }
 
   try {
+    // ----- Health / Info -----
+    if (url === "/" && req.method === "GET") {
+      const info = {
+        name: "opencompletions",
+        status: "ok",
+        cli: CLI.name,
+        backend: BACKEND,
+        active_workers: activeWorkers,
+        queued: queue.length,
+        max_concurrency: MAX_CONCURRENCY,
+        endpoints: {
+          openai_chat: "POST /v1/chat/completions",
+          openai_completions: "POST /v1/completions",
+          openai_responses: "POST /v1/responses",
+          openai_embeddings: "POST /v1/embeddings",
+          anthropic_messages: "POST /v1/messages",
+          anthropic_count_tokens: "POST /v1/messages/count_tokens",
+          agent: "POST /v1/agent",
+          file_upload: "POST /v1/files/upload",
+          file_list: "GET  /v1/files/:workspace_id",
+          file_download: "GET  /v1/files/:workspace_id/:filename",
+          file_delete: "DELETE /v1/files/:workspace_id",
+          openapi_spec: "GET  /openapi.json",
+          docs: "GET  /docs",
+          models: "GET  /v1/models",
+          model_detail: "GET  /v1/models/:id",
+        },
+      };
+      if (BACKEND === "sprite") {
+        info.sprites = spritePool.map((s) => ({
+          name: s.name,
+          active_jobs: s.busy,
+        }));
+      }
+      if (BACKEND === "vercel") {
+        info.sandboxes = vercelPool.map((s) => ({
+          id: s.id,
+          active_jobs: s.busy,
+        }));
+      }
+      return sendJSON(200, info);
+    }
+
     // ----- OpenAI: GET /v1/models -----
     if (url === "/v1/models" && req.method === "GET") {
       return sendJSON(200, buildOpenAIModelsResponse());
@@ -2428,8 +2818,50 @@ const server = http.createServer(async (req, res) => {
           return sendJSON(400, { error: { message: "opencode backend does not support disallowed_tools", type: "invalid_request_error" } });
         if (body.max_budget_usd != null)
           return sendJSON(400, { error: { message: "opencode backend does not support max_budget_usd", type: "invalid_request_error" } });
-        if (body.mcp_servers && Object.keys(body.mcp_servers).length)
-          return sendJSON(400, { error: { message: "opencode backend does not support per-request MCP config", type: "invalid_request_error" } });
+      }
+
+      // Workspace integration
+      const wsId = body.workspace_id || null;
+      if (wsId && body.cwd) {
+        return sendJSON(400, { error: { message: "workspace_id and cwd are mutually exclusive", type: "invalid_request_error" } });
+      }
+
+      let workspaceCwd = null;
+      let ws = null;
+      if (wsId) {
+        ws = files.getWorkspace(wsId);
+        if (!ws) {
+          return sendJSON(404, { error: { message: "Workspace not found", type: "not_found" } });
+        }
+        if (ws.state !== "created" && ws.state !== "completed") {
+          return sendJSON(409, { error: { message: `Workspace is in '${ws.state}' state, expected 'created' or 'completed'`, type: "conflict" } });
+        }
+        // Validate session_id + workspace_id don't conflict on backend binding
+        if (body.session_id) {
+          if (BACKEND === "sprite") {
+            const wsSprite = workspaceToSprite.get(wsId);
+            const sessSprite = sessionToSprite.get(body.session_id);
+            if (wsSprite && sessSprite && wsSprite !== sessSprite) {
+              return sendJSON(409, { error: { message: "workspace_id and session_id are bound to different sprites", type: "conflict" } });
+            }
+          } else if (BACKEND === "vercel") {
+            const wsSandbox = workspaceToSandbox.get(wsId);
+            const sessSandbox = sessionToSandbox.get(body.session_id);
+            if (wsSandbox && sessSandbox && wsSandbox !== sessSandbox) {
+              return sendJSON(409, { error: { message: "workspace_id and session_id are bound to different sandboxes", type: "conflict" } });
+            }
+          }
+        }
+        // Pre-run validation: verify workspace dir still exists on remote
+        if (BACKEND !== "local") {
+          const exists = await files.validateWorkspaceExists(wsId);
+          if (!exists) {
+            files.setWorkspaceState(wsId, "error");
+            return sendJSON(410, { error: { message: "Workspace directory no longer exists on remote", type: "gone" } });
+          }
+        }
+        workspaceCwd = files.getWorkspaceCwd(wsId);
+        files.setWorkspaceState(wsId, "running");
       }
 
       const agentOpts = {
@@ -2445,22 +2877,222 @@ const server = http.createServer(async (req, res) => {
         mcpServers: body.mcp_servers || null,
         clientToken: forwardToken,
         timeoutMs: body.timeout_ms || null,
+        workspaceId: wsId,
+        workspaceCwd,
       };
+
+      // Auto-inject file manifest into system prompt
+      if (wsId) {
+        const manifest = files.buildFileManifest(wsId);
+        if (manifest) {
+          agentOpts.systemPrompt = agentOpts.systemPrompt
+            ? `${manifest}\n\n${agentOpts.systemPrompt}`
+            : manifest;
+        }
+      }
 
       const stream = body.stream !== false; // default true
 
-      if (stream) {
-        return await handleAgentStream(req, res, start, body.prompt, agentOpts);
-      } else {
-        return await handleAgentBuffered(
-          req,
-          res,
-          start,
-          body.prompt,
-          agentOpts,
-          sendJSON,
-        );
+      // Wrap the agent run to set workspace state on completion
+      const runAgent = async () => {
+        try {
+          if (stream) {
+            await handleAgentStream(req, res, start, body.prompt, agentOpts);
+          } else {
+            await handleAgentBuffered(
+              req, res, start, body.prompt, agentOpts, sendJSON,
+            );
+          }
+          if (wsId) files.setWorkspaceState(wsId, "completed");
+        } catch (err) {
+          if (wsId) files.setWorkspaceState(wsId, "error");
+          throw err;
+        }
+      };
+
+      return await runAgent();
+    }
+
+    // ----- Built-in MCP Server (Streamable HTTP) -----
+    if (url === "/mcp" || url === "/v1/mcp") {
+      return handleMcp(req, res, start);
+    }
+
+    // ----- File Upload: POST /v1/files/upload -----
+    if (url === "/v1/files/upload" && req.method === "POST") {
+      // Validate filename from header
+      const rawFilename = req.headers["x-filename"];
+      if (!rawFilename) {
+        return sendJSON(400, { error: { message: "X-Filename header required", type: "invalid_request_error" } });
       }
+      let filename;
+      try {
+        filename = decodeURIComponent(rawFilename);
+      } catch {
+        return sendJSON(400, { error: { message: "Invalid X-Filename encoding", type: "invalid_request_error" } });
+      }
+      filename = files.validateFilename(filename);
+      if (!filename) {
+        return sendJSON(400, { error: { message: "Invalid filename", type: "invalid_request_error" } });
+      }
+
+      // Read raw body
+      let buffer;
+      try {
+        buffer = await readRawBody(req, MAX_FILE_SIZE);
+      } catch (err) {
+        const code = err.code === 413 ? 413 : err.code === "ENOSPC" ? 507 : 400;
+        return sendJSON(code, { error: { message: err.message, type: "invalid_request_error" } });
+      }
+
+      // Get or create workspace
+      let workspaceId = req.headers["x-workspace-id"] || null;
+      if (workspaceId) {
+        const ws = files.getWorkspace(workspaceId);
+        if (!ws) {
+          return sendJSON(404, { error: { message: "Workspace not found", type: "not_found" } });
+        }
+        if (ws.state === "running") {
+          return sendJSON(409, { error: { message: "Cannot upload while workspace is running", type: "conflict" } });
+        }
+        // Check workspace size limit
+        if (ws.totalBytes + buffer.length > MAX_WORKSPACE_SIZE) {
+          return sendJSON(413, { error: { message: `Workspace size limit exceeded (max ${MAX_WORKSPACE_SIZE} bytes)`, type: "invalid_request_error" } });
+        }
+      } else {
+        // Create new workspace
+        let spriteName = null;
+        let sandboxId = null;
+
+        if (BACKEND === "sprite") {
+          // Round-robin: pick least-busy sprite (without incrementing busy counter)
+          let sprite = spritePool[0];
+          for (let i = 1; i < spritePool.length; i++) {
+            if (spritePool[i].busy < sprite.busy) sprite = spritePool[i];
+          }
+          spriteName = sprite.name;
+        } else if (BACKEND === "vercel") {
+          // Pick least-busy sandbox (without incrementing busy counter)
+          let sandbox = null;
+          for (let i = 0; i < vercelPool.length; i++) {
+            if (vercelPool[i].replacing) continue;
+            if (!sandbox || vercelPool[i].busy < sandbox.busy) sandbox = vercelPool[i];
+          }
+          if (!sandbox) {
+            return sendJSON(503, { error: { message: "No healthy sandboxes available", type: "server_error" } });
+          }
+          sandboxId = sandbox.id;
+        }
+
+        try {
+          const result = await files.createWorkspace(BACKEND, spriteName, sandboxId);
+          workspaceId = result.id;
+          // Track binding
+          if (spriteName) workspaceToSprite.set(workspaceId, spriteName);
+          if (sandboxId) workspaceToSandbox.set(workspaceId, sandboxId);
+        } catch (err) {
+          const code = err.code === 502 ? 502 : 500;
+          return sendJSON(code, { error: { message: `Failed to create workspace: ${err.message}`, type: "server_error" } });
+        }
+      }
+
+      // Save file
+      try {
+        const fileInfo = await files.saveFile(workspaceId, filename, buffer);
+        return sendJSON(200, {
+          workspace_id: workspaceId,
+          file: fileInfo,
+        });
+      } catch (err) {
+        if (err.code === "ENOSPC") {
+          return sendJSON(507, { error: { message: "Disk full", type: "server_error" } });
+        }
+        const code = err.code === 502 ? 502 : err.code === 409 ? 409 : 500;
+        files.setWorkspaceState(workspaceId, "error");
+        return sendJSON(code, { error: { message: err.message, type: "server_error" } });
+      }
+    }
+
+    // ----- File List: GET /v1/files/:workspace_id -----
+    if (url.startsWith("/v1/files/") && req.method === "GET") {
+      const rest = url.slice("/v1/files/".length);
+      const slashIdx = rest.indexOf("/");
+
+      if (slashIdx === -1) {
+        // List files: GET /v1/files/:workspace_id
+        const wsId = rest;
+        try {
+          const fileList = await files.listFiles(wsId);
+          return sendJSON(200, { workspace_id: wsId, files: fileList });
+        } catch (err) {
+          const code = err.code || 500;
+          return sendJSON(code, { error: { message: err.message, type: code === 404 ? "not_found" : "server_error" } });
+        }
+      } else {
+        // Download file: GET /v1/files/:workspace_id/*
+        const wsId = rest.slice(0, slashIdx);
+        const rawPath = rest.slice(slashIdx + 1);
+
+        // Decode each URL segment individually
+        let decodedFilename;
+        try {
+          decodedFilename = rawPath
+            .split("/")
+            .map((seg) => decodeURIComponent(seg))
+            .join("/");
+        } catch {
+          return sendJSON(400, { error: { message: "Invalid URL encoding", type: "invalid_request_error" } });
+        }
+
+        // Validate filename (only allow basename, no subdirectories)
+        const safeName = files.validateFilename(decodedFilename);
+        if (!safeName) {
+          return sendJSON(400, { error: { message: "Invalid filename", type: "invalid_request_error" } });
+        }
+
+        try {
+          const stream = await files.readFile(wsId, safeName);
+          const contentType = files.contentTypeForFile(safeName);
+          res.writeHead(200, {
+            "Content-Type": contentType,
+            "Content-Disposition": `attachment; filename="${encodeURIComponent(safeName)}"`,
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Expose-Headers": "X-Workspace-Id",
+          });
+          stream.pipe(res);
+          stream.on("error", (err) => {
+            console.error(`File stream error: ${err.message}`);
+            if (!res.headersSent) {
+              sendJSON(502, { error: { message: "File read error", type: "server_error" } });
+            } else {
+              res.end();
+            }
+          });
+          stream.on("end", () => {
+            console.log(`${req.method} ${req.url} 200 ${Date.now() - start}ms`);
+          });
+          return;
+        } catch (err) {
+          const code = err.code || 500;
+          return sendJSON(code, { error: { message: err.message, type: code === 404 ? "not_found" : "server_error" } });
+        }
+      }
+    }
+
+    // ----- File Delete: DELETE /v1/files/:workspace_id -----
+    if (url.startsWith("/v1/files/") && req.method === "DELETE") {
+      const wsId = url.slice("/v1/files/".length);
+      const ws = files.getWorkspace(wsId);
+      if (!ws) {
+        return sendJSON(404, { error: { message: "Workspace not found", type: "not_found" } });
+      }
+      // Fire-and-forget cleanup
+      files.deleteWorkspace(wsId);
+      workspaceToSprite.delete(wsId);
+      workspaceToSandbox.delete(wsId);
+      return sendJSON(200, { deleted: true, workspace_id: wsId });
     }
 
     sendJSON(404, { error: { message: "Not found", type: "not_found" } });
@@ -2477,12 +3109,32 @@ const server = http.createServer(async (req, res) => {
 // Startup
 // ---------------------------------------------------------------------------
 async function start() {
+  // Init files module with backend config
+  files.init({
+    SPRITE_API,
+    SPRITE_TOKEN,
+    VERCEL_API,
+    VERCEL_TOKEN,
+    VERCEL_TEAM_ID,
+  });
+
+  // Cleanup orphaned local workspace dirs from prior crashes
+  files.cleanupOrphaned();
+
   if (BACKEND === "sprite") {
     await initSprites();
   }
   if (BACKEND === "vercel") {
     await initVercelPool();
   }
+
+  // Periodic workspace cleanup (every 15 min)
+  const wsCleanupInterval = setInterval(() => {
+    files.cleanupExpired(WORKSPACE_TTL_MS).catch((err) => {
+      console.warn(`Workspace cleanup error: ${err.message}`);
+    });
+  }, 15 * 60 * 1000);
+  wsCleanupInterval.unref();
 
   server.listen(PORT, () => {
     const backendLabels = {
@@ -2511,12 +3163,19 @@ async function start() {
 ║    POST /v1/messages              (Anthropic messages)   ║
 ║    POST /v1/messages/count_tokens (Anthropic tokens)     ║
 ║    POST /v1/agent                 (Agent API)            ║
+║    POST /v1/files/upload          (File upload)          ║
+║    GET  /v1/files/:id             (List/download files)  ║
+║    DELETE /v1/files/:id           (Delete workspace)     ║
 ║    GET  /v1/models                (Model list)           ║
 ║    GET  /v1/models/:id            (Model detail)         ║
 ║    GET  /v1/status                (Queue status)         ║
 ║    GET  /openapi.json             (OpenAPI spec)         ║
 ║    GET  /docs                    (API docs viewer)      ║
-║    GET  /                         (Health check)         ║
+║    POST /mcp                      (Built-in MCP server)  ║
+║    GET  /                         (Health check)         ║${resolvedSkillsPath ? `
+║                                                          ║
+║  Skills:     ${(resolvedSkillsPath.length > 40 ? "..." + resolvedSkillsPath.slice(-40) : resolvedSkillsPath).padEnd(43)}║
+║  Scripts:    ${(SKILLS_SCRIPTS_ENABLED ? "enabled" : "disabled").padEnd(43)}║` : ""}
 ║    * /v1/ prefix optional on all routes                  ║
 ║                                                          ║
 ╚══════════════════════════════════════════════════════════╝
@@ -2546,6 +3205,9 @@ function shutdown(signal) {
   for (const proc of activeProcesses) {
     proc.kill("SIGTERM");
   }
+
+  // Clean up workspaces (fire-and-forget for remote)
+  files.cleanupExpired(0).catch(() => {});
 
   // Clean up sprite credentials
   for (const name of SPRITE_NAMES) {
