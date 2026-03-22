@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "OpenCompletions API",
-    "description": "A lightweight server wrapping AI coding CLIs as a completions and agent API, with OpenAI-compatible, Anthropic-compatible, and multi-turn Agent endpoints. Supports multiple CLI backends (`--cli claude|opencode`), multiple execution backends (local, sprite, vercel).\n\n**Authentication** uses two layers: a `Bearer` token authenticates the client to the server (configured via `--api-key`), while the `x-api-key` header forwards the provider auth token (e.g. Anthropic API key) to the CLI backend. Completion and agent endpoints require both; utility and model endpoints require only Bearer or no auth.",
+    "description": "A lightweight server wrapping AI coding CLIs as a completions and agent API, with OpenAI-compatible, Anthropic-compatible, and multi-turn Agent endpoints. Supports multiple CLI backends (`--cli claude|opencode`), multiple execution backends (local, sprite, vercel).\n\n**Authentication**: When the server is started with `--api-key`, requests must include either a `Bearer` token or an `x-api-key` header matching the server key. The `x-api-key` header is also forwarded to the CLI backend as the provider auth token (e.g. Anthropic API key). If the server has a pre-configured provider key, per-request `x-api-key` is optional. Health check, status, docs, and spec endpoints require no authentication.",
     "version": "1.0.0",
     "license": {
       "name": "MIT"
@@ -35,12 +35,53 @@
         }
       }
     },
+    "/openapi.json": {
+      "get": {
+        "operationId": "getOpenApiSpec",
+        "summary": "OpenAPI specification",
+        "tags": ["Utility"],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The OpenAPI JSON specification for this API",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/docs": {
+      "get": {
+        "operationId": "getDocs",
+        "summary": "Interactive API documentation",
+        "description": "Serves a Scalar API reference UI with a direct download link to the OpenAPI spec.",
+        "tags": ["Utility"],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "HTML page with interactive API documentation",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/models": {
       "get": {
         "operationId": "listModels",
         "summary": "List available models",
         "tags": ["OpenAI-Compatible"],
-        "security": [{ "BearerAuth": [] }],
+        "security": [{ "BearerAuth": [] }, { "ProviderKey": [] }],
         "responses": {
           "200": {
             "description": "Model list",
@@ -48,6 +89,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ModelListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -60,7 +111,7 @@
         "operationId": "getModel",
         "summary": "Get model details",
         "tags": ["OpenAI-Compatible"],
-        "security": [{ "BearerAuth": [] }],
+        "security": [{ "BearerAuth": [] }, { "ProviderKey": [] }],
         "parameters": [
           {
             "name": "model_id",
@@ -78,6 +129,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Model"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -100,7 +161,7 @@
         "operationId": "createChatCompletion",
         "summary": "Create a chat completion (OpenAI-compatible)",
         "tags": ["OpenAI-Compatible"],
-        "security": [{ "BearerAuth": [], "ProviderKey": [] }],
+        "security": [{ "BearerAuth": [] }, { "ProviderKey": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -136,6 +197,16 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -145,7 +216,7 @@
         "operationId": "createCompletion",
         "summary": "Create a text completion (OpenAI-compatible)",
         "tags": ["OpenAI-Compatible"],
-        "security": [{ "BearerAuth": [], "ProviderKey": [] }],
+        "security": [{ "BearerAuth": [] }, { "ProviderKey": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -181,6 +252,16 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -190,7 +271,7 @@
         "operationId": "createMessage",
         "summary": "Create a message (Anthropic-compatible)",
         "tags": ["Anthropic-Compatible"],
-        "security": [{ "BearerAuth": [], "ProviderKey": [] }],
+        "security": [{ "BearerAuth": [] }, { "ProviderKey": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -227,6 +308,16 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -236,7 +327,7 @@
         "operationId": "countTokens",
         "summary": "Estimate token count (Anthropic-compatible)",
         "tags": ["Anthropic-Compatible"],
-        "security": [{ "BearerAuth": [], "ProviderKey": [] }],
+        "security": [{ "BearerAuth": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -264,6 +355,16 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -274,7 +375,7 @@
         "summary": "Create embeddings (stub)",
         "description": "Returns deterministic hash-based pseudo-embeddings (1536 dimensions). These are NOT semantically meaningful — they exist for SDK compatibility with tools like Continue.dev and LangChain that expect this endpoint. Use a real embedding provider for semantic search.",
         "tags": ["OpenAI-Compatible"],
-        "security": [{ "BearerAuth": [] }],
+        "security": [{ "BearerAuth": [] }, { "ProviderKey": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -305,6 +406,16 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -315,7 +426,7 @@
         "summary": "Create a response (OpenAI Responses API)",
         "description": "OpenAI's new unified API format. Accepts `input` (string or message array) and optional `instructions` (system prompt). Supports streaming.",
         "tags": ["OpenAI-Compatible"],
-        "security": [{ "BearerAuth": [], "ProviderKey": [] }],
+        "security": [{ "BearerAuth": [] }, { "ProviderKey": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -352,6 +463,16 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -362,7 +483,7 @@
         "summary": "Run a multi-turn agent with tool use",
         "description": "Starts an autonomous agent that can use tools (Read, Edit, Bash, etc.) across multiple turns. Streams Claude Code's NDJSON events as SSE by default. Supports session resumption, tool restrictions, MCP servers, and budget caps. Note: when the server is started with `--cli opencode`, the fields `allowed_tools`, `disallowed_tools`, `max_budget_usd`, and `mcp_servers` are not supported and will return 400 errors if provided.",
         "tags": ["Agent"],
-        "security": [{ "BearerAuth": [], "ProviderKey": [] }],
+        "security": [{ "BearerAuth": [] }, { "ProviderKey": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -396,6 +517,16 @@
           },
           "400": {
             "description": "Invalid request (e.g. missing prompt)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
             "content": {
               "application/json": {
                 "schema": {
@@ -618,6 +749,10 @@
               { "type": "string" },
               { "type": "array", "items": { "type": "string" } }
             ]
+          },
+          "suffix": {
+            "type": "string",
+            "description": "Suffix text for fill-in-the-middle (FIM) completions. Appended after the generated completion."
           },
           "stream": {
             "type": "boolean",
@@ -1002,7 +1137,29 @@
           "active_workers": { "type": "integer" },
           "queued": { "type": "integer" },
           "max_concurrency": { "type": "integer" },
-          "endpoints": { "type": "object" }
+          "endpoints": { "type": "object" },
+          "sprites": {
+            "type": "array",
+            "description": "Present when backend is `sprite`",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "active_jobs": { "type": "integer" }
+              }
+            }
+          },
+          "sandboxes": {
+            "type": "array",
+            "description": "Present when backend is `vercel`",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "active_jobs": { "type": "integer" }
+              }
+            }
+          }
         },
         "required": ["name", "status", "backend"]
       },
@@ -1012,7 +1169,29 @@
           "active_workers": { "type": "integer" },
           "queued": { "type": "integer" },
           "max_concurrency": { "type": "integer" },
-          "backend": { "type": "string" }
+          "backend": { "type": "string" },
+          "sprites": {
+            "type": "array",
+            "description": "Present when backend is `sprite`",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "active_jobs": { "type": "integer" }
+              }
+            }
+          },
+          "sandboxes": {
+            "type": "array",
+            "description": "Present when backend is `vercel`",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "active_jobs": { "type": "integer" }
+              }
+            }
+          }
         },
         "required": ["active_workers", "queued", "max_concurrency", "backend"]
       },

@@ -2127,8 +2127,75 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
 
-  // Public routes (no auth required)
+  // Public routes (no auth required) — served before the auth gate
   const publicUrl = req.url.split("?")[0];
+
+  // Health check
+  if (publicUrl === "/" && req.method === "GET") {
+    const info = {
+      name: "opencompletions",
+      status: "ok",
+      cli: CLI.name,
+      backend: BACKEND,
+      active_workers: activeWorkers,
+      queued: queue.length,
+      max_concurrency: MAX_CONCURRENCY,
+      endpoints: {
+        openai_chat: "POST /v1/chat/completions",
+        openai_completions: "POST /v1/completions",
+        openai_responses: "POST /v1/responses",
+        openai_embeddings: "POST /v1/embeddings",
+        anthropic_messages: "POST /v1/messages",
+        anthropic_count_tokens: "POST /v1/messages/count_tokens",
+        agent: "POST /v1/agent",
+        openapi_spec: "GET  /openapi.json",
+        docs: "GET  /docs",
+        models: "GET  /v1/models",
+        model_detail: "GET  /v1/models/:id",
+      },
+    };
+    if (BACKEND === "sprite") {
+      info.sprites = spritePool.map((s) => ({
+        name: s.name,
+        active_jobs: s.busy,
+      }));
+    }
+    if (BACKEND === "vercel") {
+      info.sandboxes = vercelPool.map((s) => ({
+        id: s.id,
+        active_jobs: s.busy,
+      }));
+    }
+    sendJSON(200, info);
+    console.log(`${req.method} ${req.url} 200 ${Date.now() - start}ms`);
+    return;
+  }
+
+  // Queue / worker status
+  if ((publicUrl === "/v1/status" || publicUrl === "/status") && req.method === "GET") {
+    const status = {
+      active_workers: activeWorkers,
+      queued: queue.length,
+      max_concurrency: MAX_CONCURRENCY,
+      backend: BACKEND,
+    };
+    if (BACKEND === "vercel") {
+      status.sandboxes = vercelPool.map((s) => ({
+        id: s.id,
+        active_jobs: s.busy,
+      }));
+    }
+    if (BACKEND === "sprite") {
+      status.sprites = spritePool.map((s) => ({
+        name: s.name,
+        active_jobs: s.busy,
+      }));
+    }
+    sendJSON(200, status);
+    console.log(`${req.method} ${req.url} 200 ${Date.now() - start}ms`);
+    return;
+  }
+
   if (publicUrl === "/openapi.json" && req.method === "GET") {
     try {
       const specPath = require("path").join(__dirname, "openapi.json");
@@ -2201,7 +2268,7 @@ const server = http.createServer(async (req, res) => {
   // Many SDKs set base_url with or without /v1/, causing 404s
   const V1_ROUTES = [
     "/chat/completions", "/completions", "/models", "/messages",
-    "/messages/count_tokens", "/agent", "/embeddings", "/responses", "/status",
+    "/messages/count_tokens", "/agent", "/embeddings", "/responses",
   ];
   for (const route of V1_ROUTES) {
     if (url === route || (route === "/models" && url.startsWith("/models/"))) {
@@ -2211,45 +2278,6 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
-    // ----- Health / Info -----
-    if (url === "/" && req.method === "GET") {
-      const info = {
-        name: "opencompletions",
-        status: "ok",
-        cli: CLI.name,
-        backend: BACKEND,
-        active_workers: activeWorkers,
-        queued: queue.length,
-        max_concurrency: MAX_CONCURRENCY,
-        endpoints: {
-          openai_chat: "POST /v1/chat/completions",
-          openai_completions: "POST /v1/completions",
-          openai_responses: "POST /v1/responses",
-          openai_embeddings: "POST /v1/embeddings",
-          anthropic_messages: "POST /v1/messages",
-          anthropic_count_tokens: "POST /v1/messages/count_tokens",
-          agent: "POST /v1/agent",
-          openapi_spec: "GET  /openapi.json",
-          docs: "GET  /docs",
-          models: "GET  /v1/models",
-          model_detail: "GET  /v1/models/:id",
-        },
-      };
-      if (BACKEND === "sprite") {
-        info.sprites = spritePool.map((s) => ({
-          name: s.name,
-          active_jobs: s.busy,
-        }));
-      }
-      if (BACKEND === "vercel") {
-        info.sandboxes = vercelPool.map((s) => ({
-          id: s.id,
-          active_jobs: s.busy,
-        }));
-      }
-      return sendJSON(200, info);
-    }
-
     // ----- OpenAI: GET /v1/models -----
     if (url === "/v1/models" && req.method === "GET") {
       return sendJSON(200, buildOpenAIModelsResponse());
@@ -2384,28 +2412,6 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ----- Queue status -----
-    if (url === "/v1/status" && req.method === "GET") {
-      const status = {
-        active_workers: activeWorkers,
-        queued: queue.length,
-        max_concurrency: MAX_CONCURRENCY,
-        backend: BACKEND,
-      };
-      if (BACKEND === "vercel") {
-        status.sandboxes = vercelPool.map((s) => ({
-          id: s.id,
-          active_jobs: s.busy,
-        }));
-      }
-      if (BACKEND === "sprite") {
-        status.sprites = spritePool.map((s) => ({
-          name: s.name,
-          active_jobs: s.busy,
-        }));
-      }
-      return sendJSON(200, status);
-    }
-
     // ----- Agent API: POST /v1/agent -----
     if (url === "/v1/agent" && req.method === "POST") {
       const body = await parseBody(req);
