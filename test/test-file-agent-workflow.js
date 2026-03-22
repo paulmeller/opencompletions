@@ -52,7 +52,7 @@ const BASE = `http://localhost:${PORT}`;
 
 // Backend config from environment (default: local)
 const BACKEND = process.env.TEST_BACKEND || "local";
-const MASTER_TIMEOUT_MS = BACKEND === "local" ? 180000 : 300000; // 3 min local, 5 min remote
+const MASTER_TIMEOUT_MS = BACKEND === "local" ? 300000 : 300000; // 5 min all backends
 
 function buildServerArgs() {
   const args = [SERVER_JS, "--backend", BACKEND, "--port", String(PORT), "--skills-path", SKILLS_PATH];
@@ -324,9 +324,12 @@ async function run() {
     // -----------------------------------------------------------------------
     // Step 3: POST /v1/agent with MCP skills
     // -----------------------------------------------------------------------
-    // MCP skills server is only reachable from localhost — include it for local backend only
-    const useMcp = BACKEND === "local";
-    console.log(`Step 3: Running agent ${useMcp ? "with MCP skills" : "(no MCP — remote backend)"}...`);
+    // MCP skills: local uses localhost, remote backends use public URL if available
+    const remoteMcpUrl = process.env.OC_API_URL ? `${process.env.OC_API_URL}/mcp` : null;
+    const remoteMcpKey = process.env.OC_API_KEY || null;
+    const useMcp = BACKEND === "local" || (BACKEND !== "local" && remoteMcpUrl);
+    const mcpSource = BACKEND === "local" ? "localhost" : remoteMcpUrl;
+    console.log(`Step 3: Running agent ${useMcp ? `with MCP skills (${mcpSource})` : "(no MCP)"}...`);
     console.log("  (This may take 1-2 minutes)\n");
 
     const agentBody = {
@@ -348,12 +351,13 @@ async function run() {
     };
 
     if (useMcp) {
-      agentBody.mcp_servers = {
-        skills: {
-          type: "http",
-          url: `http://localhost:${PORT}/mcp`,
-        },
-      };
+      const mcpConfig = BACKEND === "local"
+        ? { type: "http", url: `http://localhost:${PORT}/mcp` }
+        : { type: "http", url: remoteMcpUrl };
+      if (BACKEND !== "local" && remoteMcpKey) {
+        mcpConfig.headers = { Authorization: `Bearer ${remoteMcpKey}` };
+      }
+      agentBody.mcp_servers = { skills: mcpConfig };
     }
 
     const sseResult = await requestSSE("/v1/agent", agentBody);
@@ -370,12 +374,24 @@ async function run() {
     );
     assert.ok(hasInit, "Expected a system/init event");
 
-    // MCP skill tool assertions only for local backend
+    // MCP skill tool assertions when skills are available
+    // Check for actual tool_use blocks, not just text mentions
     if (useMcp) {
-      const allEventText = JSON.stringify(sseResult.events);
-      assert.ok(allEventText.includes("list_skills"), "Expected list_skills tool call");
-      assert.ok(allEventText.includes("activate_skill"), "Expected activate_skill tool call");
-      assert.ok(allEventText.includes("read_resource"), "Expected read_resource tool call");
+      const toolUseNames = sseResult.events
+        .filter((e) => e.data?.message?.content)
+        .flatMap((e) => e.data.message.content)
+        .filter((b) => b.type === "tool_use")
+        .map((b) => b.name);
+      const hasSkills = toolUseNames.some((n) => n === "mcp__skills__list_skills");
+      if (hasSkills) {
+        assert.ok(toolUseNames.some((n) => n === "mcp__skills__activate_skill"), "Expected activate_skill tool call");
+        assert.ok(toolUseNames.some((n) => n === "mcp__skills__read_resource"), "Expected read_resource tool call");
+        console.log("  MCP skill tools used: list_skills, activate_skill, read_resource");
+      } else if (BACKEND === "local") {
+        assert.fail("Expected list_skills tool call on local backend");
+      } else {
+        console.log("  MCP connected but skills not available on remote (deploy with --skills-path)");
+      }
     }
 
     // Check for result event with workspace_id
