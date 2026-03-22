@@ -118,7 +118,7 @@ Skills are directories under `skills/` with a `SKILL.md` (YAML frontmatter + mar
 
 Tokens are stored in `.env` (gitignored). The test harness loads `.env` automatically. Key variables:
 
-- `SPRITE_TOKEN` / `SPRITE_NAMES` — Sprite backend auth (primary sprite: `claude-completions`)
+- `SPRITE_TOKEN` / `SPRITE_NAME` — Sprite backend auth (primary sprite: `claude-completions`)
 - `VERCEL_TOKEN` / `VERCEL_TEAM_ID` / `VERCEL_PROJECT_ID` / `VERCEL_SNAPSHOT_ID` — Vercel backend auth
 - `CLAUDE_CODE_OAUTH_TOKEN` — OAuth token forwarded to remote CLIs (required for sprite/vercel)
 - `ANTHROPIC_API_KEY` — API key forwarded to remote CLIs (alternative to OAuth)

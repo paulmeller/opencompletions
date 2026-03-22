@@ -74,9 +74,9 @@ function buildServerArgs() {
     const token = process.env.SPRITE_TOKEN || process.env.SPRITES_TOKEN || "";
     if (!token) { console.error("SPRITE_TOKEN required"); process.exit(1); }
     args.push("--sprite-token", token);
-    const names = (process.env.SPRITE_NAMES || "").split(",").filter(Boolean);
-    if (names.length === 0) { console.error("SPRITE_NAMES required (comma-separated)"); process.exit(1); }
-    for (const name of names) args.push("--sprite-name", name);
+    const name = process.env.SPRITE_NAME || "";
+    if (!name) { console.error("SPRITE_NAME required"); process.exit(1); }
+    args.push("--sprite-name", name);
   }
   return args;
 }
