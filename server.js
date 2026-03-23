@@ -530,6 +530,86 @@ function parseNDJSONLines(buffer, onLine) {
 }
 
 // ---------------------------------------------------------------------------
+// JSON response format utilities
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the first valid JSON object or array from a string.
+ * Handles markdown fences, surrounding prose, nested braces.
+ * Returns { json, raw } or null.
+ */
+function getFirstJson(text) {
+  if (!text || typeof text !== "string") return null;
+
+  // 1. Try markdown code fences
+  const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
+  if (fenceMatch) {
+    try {
+      const parsed = JSON.parse(fenceMatch[1].trim());
+      if (typeof parsed === "object" && parsed !== null) {
+        return { json: parsed, raw: fenceMatch[1].trim() };
+      }
+    } catch {}
+  }
+
+  // 2. Try the entire string
+  const trimmed = text.trim();
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed === "object" && parsed !== null) {
+      return { json: parsed, raw: trimmed };
+    }
+  } catch {}
+
+  // 3. Scan for first { or [ and match its closing counterpart
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    if (ch !== "{" && ch !== "[") continue;
+    const close = ch === "{" ? "}" : "]";
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+
+    for (let j = i; j < trimmed.length; j++) {
+      const c = trimmed[j];
+      if (escape) { escape = false; continue; }
+      if (c === "\\") { escape = true; continue; }
+      if (c === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (c === ch) depth++;
+      if (c === close) {
+        depth--;
+        if (depth === 0) {
+          const candidate = trimmed.slice(i, j + 1);
+          try {
+            const parsed = JSON.parse(candidate);
+            if (typeof parsed === "object" && parsed !== null) {
+              return { json: parsed, raw: candidate };
+            }
+          } catch {}
+          break;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function normalizeResponseFormat(responseFormat) {
+  if (!responseFormat) return "text";
+  if (typeof responseFormat === "string") return responseFormat === "json" ? "json" : "text";
+  if (typeof responseFormat === "object" && responseFormat.type === "json_object") return "json";
+  return "text";
+}
+
+function applyJsonFormat(resultText) {
+  if (!resultText) return { result: resultText, json_error: "Empty response" };
+  const extracted = getFirstJson(resultText);
+  if (extracted) return { result: JSON.stringify(extracted.json) };
+  return { result: resultText, json_error: "Could not extract valid JSON from agent response" };
+}
+
+// ---------------------------------------------------------------------------
 // CLI Providers
 // ---------------------------------------------------------------------------
 const claudeProvider = {
@@ -2021,6 +2101,12 @@ async function handleAgentStream(req, res, start, prompt, agentOpts) {
         if (event.type === "result" && agentOpts.workspaceId) {
           event = { ...event, workspace_id: agentOpts.workspaceId };
         }
+        // Post-process result for JSON response format
+        if (event.type === "result" && agentOpts.responseFormat === "json" && event.result) {
+          const formatted = applyJsonFormat(event.result);
+          event = { ...event, result: formatted.result };
+          if (formatted.json_error) event.json_error = formatted.json_error;
+        }
         sseEvent(res, event.type || "message", event);
       },
     });
@@ -2083,6 +2169,14 @@ async function handleAgentBuffered(req, res, start, prompt, agentOpts, sendJSON)
       },
     });
 
+    // Post-process for JSON response format
+    let jsonError;
+    if (agentOpts.responseFormat === "json") {
+      const formatted = applyJsonFormat(resultText);
+      resultText = formatted.result;
+      jsonError = formatted.json_error;
+    }
+
     const response = {
       session_id: sessionId,
       result: resultText,
@@ -2091,9 +2185,8 @@ async function handleAgentBuffered(req, res, start, prompt, agentOpts, sendJSON)
       usage,
       events,
     };
-    if (agentOpts.workspaceId) {
-      response.workspace_id = agentOpts.workspaceId;
-    }
+    if (agentOpts.workspaceId) response.workspace_id = agentOpts.workspaceId;
+    if (jsonError) response.json_error = jsonError;
     sendJSON(200, response);
   } catch (err) {
     sendJSON(500, {
@@ -2944,6 +3037,7 @@ const server = http.createServer(async (req, res) => {
         workspaceId: wsId,
         workspaceCwd,
         backend: requestBackend,
+        responseFormat: normalizeResponseFormat(body.response_format),
       };
 
       // Auto-inject file manifest into system prompt
@@ -2954,6 +3048,14 @@ const server = http.createServer(async (req, res) => {
             ? `${manifest}\n\n${agentOpts.systemPrompt}`
             : manifest;
         }
+      }
+
+      // Auto-inject JSON format instruction
+      if (agentOpts.responseFormat === "json") {
+        const jsonInstruction = "IMPORTANT: You MUST respond with valid JSON only. Do not wrap in markdown code fences. Do not include text before or after. Your entire response must be a single valid JSON object or array.";
+        agentOpts.systemPrompt = agentOpts.systemPrompt
+          ? `${agentOpts.systemPrompt}\n\n${jsonInstruction}`
+          : jsonInstruction;
       }
 
       const stream = body.stream !== false; // default true
