@@ -898,7 +898,8 @@ const codexProvider = {
   errorLabel: "Codex",
 };
 
-const CLI = CLI_NAME === "codex" ? codexProvider : CLI_NAME === "opencode" ? opencodeProvider : claudeProvider;
+const CLI_PROVIDERS = { claude: claudeProvider, opencode: opencodeProvider, codex: codexProvider };
+const CLI = CLI_PROVIDERS[CLI_NAME] || claudeProvider;
 
 // ---------------------------------------------------------------------------
 // Backend: Local subprocess
@@ -1018,9 +1019,10 @@ function runClaudeLocalStreaming(prompt, systemPrompt, onChunk, clientToken) {
 // ---------------------------------------------------------------------------
 function runAgentLocal(prompt, opts, onEvent) {
   return new Promise((resolve, reject) => {
-    const cliArgs = CLI.buildAgentArgs(opts);
-    if (!CLI.promptViaStdin) cliArgs.push(CLI.wrapPrompt(prompt, opts.systemPrompt));
-    const env = { ...process.env, ...CLI.buildAuthEnv(opts.clientToken), ...CLI.buildMcpEnv(opts) };
+    const cli = opts.cliProvider || CLI;
+    const cliArgs = cli.buildAgentArgs(opts);
+    if (!cli.promptViaStdin) cliArgs.push(cli.wrapPrompt(prompt, opts.systemPrompt));
+    const env = { ...process.env, ...cli.buildAuthEnv(opts.clientToken), ...cli.buildMcpEnv(opts) };
     const spawnOpts = { stdio: ["pipe", "pipe", "pipe"], env };
     if (opts.workspaceCwd) {
       spawnOpts.cwd = opts.workspaceCwd;
@@ -1028,7 +1030,7 @@ function runAgentLocal(prompt, opts, onEvent) {
       spawnOpts.cwd = opts.cwd;
     }
 
-    const proc = spawn(CLI.command, cliArgs, spawnOpts);
+    const proc = spawn(cli.command, cliArgs, spawnOpts);
     activeProcesses.add(proc);
 
     let settled = false;
@@ -1061,7 +1063,7 @@ function runAgentLocal(prompt, opts, onEvent) {
       opts.abortSignal.addEventListener("abort", onAbort, { once: true });
     }
 
-    const translate = CLI.createEventTranslator();
+    const translate = cli.createEventTranslator();
     proc.stdout.on("data", (chunk) => {
       buffer += chunk.toString();
       buffer = parseNDJSONLines(buffer, (event) => {
@@ -1094,7 +1096,7 @@ function runAgentLocal(prompt, opts, onEvent) {
       }
       settled = true;
       if (code === 0) resolve();
-      else reject(new Error(stderr || `${CLI.errorLabel} agent exited with code ${code}`));
+      else reject(new Error(stderr || `${cli.errorLabel} agent exited with code ${code}`));
     });
 
     proc.on("error", (err) => {
@@ -1105,7 +1107,7 @@ function runAgentLocal(prompt, opts, onEvent) {
       reject(err);
     });
 
-    if (CLI.promptViaStdin) proc.stdin.write(prompt);
+    if (cli.promptViaStdin) proc.stdin.write(cli.wrapPrompt(prompt, opts.systemPrompt));
     proc.stdin.end();
   });
 }
@@ -3129,8 +3131,23 @@ const server = http.createServer(async (req, res) => {
         }});
       }
 
+      // Per-request CLI provider selection
+      const requestCli = CLI_PROVIDERS[body.cli] || CLI;
+      if (body.cli && !CLI_PROVIDERS[body.cli]) {
+        return sendJSON(400, { error: {
+          message: `Unknown CLI provider "${body.cli}". Available: ${Object.keys(CLI_PROVIDERS).join(", ")}`,
+          type: "invalid_request_error",
+        }});
+      }
+      if (requestCli.name !== "claude" && requestBackend !== "local") {
+        return sendJSON(400, { error: {
+          message: `CLI provider "${requestCli.name}" only supports local backend`,
+          type: "invalid_request_error",
+        }});
+      }
+
       // Validate unsupported features for non-claude CLIs
-      if (CLI.name === "opencode") {
+      if (requestCli.name === "opencode") {
         if (body.allowed_tools?.length)
           return sendJSON(400, { error: { message: "opencode backend does not support allowed_tools", type: "invalid_request_error" } });
         if (body.disallowed_tools?.length)
@@ -3199,6 +3216,7 @@ const server = http.createServer(async (req, res) => {
         workspaceId: wsId,
         workspaceCwd,
         backend: requestBackend,
+        cliProvider: requestCli,
         responseFormat: normalizeResponseFormat(body.response_format),
       };
 
@@ -3231,7 +3249,7 @@ const server = http.createServer(async (req, res) => {
         prompt: body.prompt,
         systemPrompt: body.system_prompt,
         backend: requestBackend,
-        cli: CLI.name,
+        cli: requestCli.name,
         model: body.model || null,
       });
 
