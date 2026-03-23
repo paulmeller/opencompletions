@@ -1,6 +1,7 @@
 ---
 name: visa-researcher
 description: Researches all available visa and residence permit types for a given country, returning structured data with requirements, fees, and application process.
+tags: [legal, immigration]
 ---
 
 # Visa Researcher

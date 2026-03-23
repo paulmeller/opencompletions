@@ -2634,10 +2634,13 @@ const server = http.createServer(async (req, res) => {
     } else {
       authContext = await authModule.validateKey(bearerToken, AUTH_PROVIDER, AUTH_CONFIG);
       if (!authContext) {
+        const hash = createHash("sha256").update(bearerToken || "").digest("hex").slice(0, 8);
+        console.log(`[auth] DENIED token=${hash}... endpoint=${req.url}`);
         return sendJSON(401, {
           error: { message: "Invalid API key", type: "authentication_error", code: 401 },
         });
       }
+      console.log(`[auth] OK keyId=${authContext.keyId} org=${authContext.orgId || "-"} endpoint=${req.url}`);
     }
   } else if (API_KEY) {
     // Legacy mode: single shared --api-key
