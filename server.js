@@ -774,9 +774,21 @@ const codexProvider = {
   buildAgentArgs(opts) {
     const args = ["exec", "--json", "--full-auto", "--skip-git-repo-check"];
     if (opts.model) args.push("--model", opts.model);
-    // max_turns not supported by Codex
     if (opts.maxTurns && opts.maxTurns !== AGENT_MAX_TURNS) {
       console.warn(`Warning: Codex does not support --max-turns (requested ${opts.maxTurns})`);
+    }
+    // Inject MCP servers via -c flags
+    const mcpConfig = mergeAgentMcpConfig(opts);
+    for (const [name, server] of Object.entries(mcpConfig)) {
+      if (server.type) args.push("-c", `mcp_servers.${name}.type="${server.type}"`);
+      if (server.url) args.push("-c", `mcp_servers.${name}.url="${server.url}"`);
+      if (server.command) args.push("-c", `mcp_servers.${name}.command="${server.command}"`);
+      if (server.args) args.push("-c", `mcp_servers.${name}.args=${JSON.stringify(server.args)}`);
+      if (server.headers) {
+        for (const [hk, hv] of Object.entries(server.headers)) {
+          args.push("-c", `mcp_servers.${name}.http_headers.${hk}="${hv}"`);
+        }
+      }
     }
     args.push("-"); // read prompt from stdin
     return args;
@@ -822,7 +834,7 @@ const codexProvider = {
     const translator = (event) => {
       if (event.type === "thread.started") {
         sessionId = event.thread_id;
-        return { type: "system", subtype: "init", session_id: sessionId, tools: [], mcp_servers: [] };
+        return { type: "system", subtype: "init", session_id: sessionId, model: "codex", tools: [], mcp_servers: [] };
       }
 
       if (event.type === "item.completed" && event.item) {
