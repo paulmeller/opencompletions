@@ -2091,21 +2091,32 @@ async function handleAgentStream(req, res, start, prompt, agentOpts) {
 
   agentOpts.abortSignal = abortController.signal;
 
+  // Accumulate assistant text for JSON extraction in streaming mode
+  let streamedText = "";
+
   try {
     await enqueueAgent(prompt, {
       ...agentOpts,
       onEvent: (event) => {
         if (aborted) return;
         if (agentOpts._beforeEvent) agentOpts._beforeEvent(event);
+        // Accumulate assistant text for JSON post-processing
+        if (agentOpts.responseFormat === "json" && event.type === "assistant" && event.message) {
+          const textBlocks = (event.message.content || []).filter((b) => b.type === "text");
+          for (const b of textBlocks) { if (b.text) streamedText += b.text; }
+        }
         // Inject workspace info into result events
         if (event.type === "result" && agentOpts.workspaceId) {
           event = { ...event, workspace_id: agentOpts.workspaceId };
         }
         // Post-process result for JSON response format
-        if (event.type === "result" && agentOpts.responseFormat === "json" && event.result) {
-          const formatted = applyJsonFormat(event.result);
-          event = { ...event, result: formatted.result };
-          if (formatted.json_error) event.json_error = formatted.json_error;
+        if (event.type === "result" && agentOpts.responseFormat === "json") {
+          const source = event.result || streamedText;
+          if (source) {
+            const formatted = applyJsonFormat(source);
+            event = { ...event, result: formatted.result };
+            if (formatted.json_error) event.json_error = formatted.json_error;
+          }
         }
         sseEvent(res, event.type || "message", event);
       },
