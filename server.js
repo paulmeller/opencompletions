@@ -100,9 +100,10 @@ const MODEL_NAME = "claude-code";
 
 // Backend config
 const BACKEND = flag("backend", "local"); // "local", "sprite", or "vercel"
-const CLI_NAME = flag("cli", "claude"); // "claude" or "opencode"
+const CLI_NAME = flag("cli", "claude"); // "claude", "opencode", or "codex"
 // Auth config: --anthropic-api-key → ANTHROPIC_API_KEY env var (priority)
 //              --claude-token → CLAUDE_CODE_OAUTH_TOKEN env var (fallback)
+//              --openai-api-key → OPENAI_API_KEY / CODEX_API_KEY (for codex provider)
 const CONFIGURED_API_KEY = flag(
   "anthropic-api-key",
   process.env.ANTHROPIC_API_KEY || "",
@@ -110,6 +111,10 @@ const CONFIGURED_API_KEY = flag(
 const CONFIGURED_OAUTH_TOKEN = flag(
   "claude-token",
   process.env.CLAUDE_CODE_OAUTH_TOKEN || "",
+);
+const CONFIGURED_OPENAI_KEY = flag(
+  "openai-api-key",
+  process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY || "",
 );
 
 // Sprite config
@@ -208,14 +213,14 @@ if (!API_KEY) {
     "WARNING: No --api-key configured. Server is open to all requests.",
   );
 }
-const VALID_CLIS = ["claude", "opencode"];
+const VALID_CLIS = ["claude", "opencode", "codex"];
 if (!VALID_CLIS.includes(CLI_NAME)) {
   console.error(
     `Error: --cli must be one of: ${VALID_CLIS.join(", ")} (got "${CLI_NAME}")`,
   );
   process.exit(1);
 }
-if (CLI_NAME === "opencode" && BACKEND !== "local") {
+if ((CLI_NAME === "opencode" || CLI_NAME === "codex") && BACKEND !== "local") {
   console.error("Error: --cli opencode only supports --backend local");
   process.exit(1);
 }
@@ -754,7 +759,146 @@ const opencodeProvider = {
   errorLabel: "opencode",
 };
 
-const CLI = CLI_NAME === "opencode" ? opencodeProvider : claudeProvider;
+// ---------------------------------------------------------------------------
+// CLI Provider: Codex (OpenAI)
+// ---------------------------------------------------------------------------
+const codexProvider = {
+  name: "codex",
+  command: "codex",
+  promptViaStdin: true,
+
+  buildCompletionArgs() {
+    return ["exec", "--json", "--full-auto", "--skip-git-repo-check", "-"];
+  },
+
+  buildAgentArgs(opts) {
+    const args = ["exec", "--json", "--full-auto", "--skip-git-repo-check"];
+    if (opts.model) args.push("--model", opts.model);
+    // max_turns not supported by Codex
+    if (opts.maxTurns && opts.maxTurns !== AGENT_MAX_TURNS) {
+      console.warn(`Warning: Codex does not support --max-turns (requested ${opts.maxTurns})`);
+    }
+    args.push("-"); // read prompt from stdin
+    return args;
+  },
+
+  buildAuthEnv(clientToken) {
+    const token = clientToken || CONFIGURED_OPENAI_KEY;
+    if (token && token.startsWith("sk-ant-")) {
+      console.warn("Warning: Anthropic token cannot be used with Codex provider");
+      return {};
+    }
+    return token ? { CODEX_API_KEY: token } : {};
+  },
+
+  buildMcpEnv() { return {}; }, // MCP via config file, not env
+
+  wrapPrompt(prompt, systemPrompt) {
+    if (systemPrompt) return `Instructions: ${systemPrompt}\n\n---\n\n${prompt}`;
+    return prompt;
+  },
+
+  // Parse NDJSON output and extract the last agent_message text (for completion mode)
+  extractResult(stdout) {
+    let lastText = "";
+    for (const line of stdout.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const event = JSON.parse(line);
+        if (event.type === "item.completed" && event.item?.type === "agent_message" && event.item.text) {
+          lastText = event.item.text;
+        }
+      } catch {}
+    }
+    return lastText;
+  },
+
+  createEventTranslator() {
+    let sessionId = null;
+    let turnCount = 0;
+    let lastText = "";
+    let totalUsage = {};
+
+    const translator = (event) => {
+      if (event.type === "thread.started") {
+        sessionId = event.thread_id;
+        return { type: "system", subtype: "init", session_id: sessionId, tools: [], mcp_servers: [] };
+      }
+
+      if (event.type === "item.completed" && event.item) {
+        const item = event.item;
+
+        if (item.type === "agent_message") {
+          lastText = item.text || "";
+          return { type: "assistant", message: { content: [{ type: "text", text: lastText }] } };
+        }
+
+        if (item.type === "command_execution") {
+          const toolUse = {
+            type: "assistant",
+            message: { content: [{ type: "tool_use", id: item.id, name: "command", input: { command: item.command || "" } }] },
+          };
+          const toolResult = {
+            type: "user",
+            message: { content: [{ type: "tool_result", tool_use_id: item.id, content: item.output || item.result || "" }] },
+          };
+          return [toolUse, toolResult];
+        }
+
+        if (item.type === "mcp_tool_call") {
+          const toolUse = {
+            type: "assistant",
+            message: { content: [{ type: "tool_use", id: item.id, name: item.name || "mcp_tool", input: item.input || {} }] },
+          };
+          const toolResult = {
+            type: "user",
+            message: { content: [{ type: "tool_result", tool_use_id: item.id, content: item.output || "" }] },
+          };
+          return [toolUse, toolResult];
+        }
+
+        if (item.type === "file_change") {
+          return {
+            type: "assistant",
+            message: { content: [{ type: "tool_use", id: item.id, name: "file_edit", input: { path: item.path || "", action: item.action || "edit" } }] },
+          };
+        }
+      }
+
+      if (event.type === "turn.completed") {
+        turnCount++;
+        if (event.usage) {
+          for (const [k, v] of Object.entries(event.usage)) {
+            totalUsage[k] = (totalUsage[k] || 0) + (typeof v === "number" ? v : 0);
+          }
+        }
+        return null; // don't emit result yet — finalize() handles it
+      }
+
+      if (event.type === "error") {
+        return { type: "error", error: { message: event.message || JSON.stringify(event), type: "codex_error" } };
+      }
+
+      return null;
+    };
+
+    // Called when the process exits to emit the final result event
+    translator.finalize = () => ({
+      type: "result",
+      session_id: sessionId,
+      num_turns: turnCount,
+      total_cost_usd: null,
+      result: lastText,
+      usage: totalUsage,
+    });
+
+    return translator;
+  },
+
+  errorLabel: "Codex",
+};
+
+const CLI = CLI_NAME === "codex" ? codexProvider : CLI_NAME === "opencode" ? opencodeProvider : claudeProvider;
 
 // ---------------------------------------------------------------------------
 // Backend: Local subprocess
@@ -796,7 +940,7 @@ function runClaudeLocal(prompt, systemPrompt, clientToken) {
       if (settled) return;
       settled = true;
       if (code === 0) {
-        resolve(cleanOutput(stdout));
+        resolve(CLI.extractResult ? CLI.extractResult(stdout) : cleanOutput(stdout));
       } else {
         reject(new Error(stderr || `${CLI.errorLabel} exited with code ${code}`));
       }
@@ -922,7 +1066,8 @@ function runAgentLocal(prompt, opts, onEvent) {
       buffer += chunk.toString();
       buffer = parseNDJSONLines(buffer, (event) => {
         const translated = translate(event);
-        if (translated) onEvent(translated);
+        if (Array.isArray(translated)) { translated.forEach((e) => onEvent(e)); }
+        else if (translated) onEvent(translated);
       });
     });
 
@@ -938,8 +1083,14 @@ function runAgentLocal(prompt, opts, onEvent) {
       if (buffer.trim()) {
         try {
           const translated = translate(JSON.parse(buffer.trim()));
-          if (translated) onEvent(translated);
+          if (Array.isArray(translated)) { translated.forEach((e) => onEvent(e)); }
+          else if (translated) onEvent(translated);
         } catch {}
+      }
+      // Emit final result event (for providers like Codex that use finalize())
+      if (translate.finalize) {
+        const final = translate.finalize();
+        if (final) onEvent(final);
       }
       settled = true;
       if (code === 0) resolve();
