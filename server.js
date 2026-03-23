@@ -42,6 +42,7 @@ const path = require("path");
 const { spawn } = require("child_process");
 const { randomUUID, timingSafeEqual, createHash } = require("crypto");
 const files = require("./files");
+const db = require("./db");
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing
@@ -74,6 +75,7 @@ function flagAll(name) {
 // Config
 // ---------------------------------------------------------------------------
 const PORT = parseInt(flag("port", "3456"), 10);
+const BASE_URL = `http://localhost:${PORT}`;
 const MAX_CONCURRENCY = parseInt(flag("concurrency", "3"), 10);
 const TIMEOUT_MS = parseInt(flag("timeout", "120000"), 10);
 const MAX_BODY_BYTES = 1 * 1024 * 1024; // 1 MB
@@ -89,6 +91,7 @@ const skillsModule = SKILLS_PATH ? require("./skills") : null;
 const API_KEY = flag("api-key", process.env.API_KEY || "");
 const AUTH_PROVIDER = flag("auth-provider", process.env.AUTH_PROVIDER || "none");
 const AUTH_CONFIG = flag("auth-config", process.env.AUTH_CONFIG || "");
+const DB_PATH = flag("db", process.env.DB_PATH || "");
 const authModule = AUTH_PROVIDER !== "none" ? (() => { try { return require("./auth"); } catch { return null; } })() : null;
 const MAX_FILE_SIZE = parseInt(flag("max-file-size", String(50 * 1024 * 1024)), 10);
 const MAX_WORKSPACE_SIZE = parseInt(flag("max-workspace-size", String(200 * 1024 * 1024)), 10);
@@ -2024,6 +2027,7 @@ async function handleAgentStream(req, res, start, prompt, agentOpts) {
       ...agentOpts,
       onEvent: (event) => {
         if (aborted) return;
+        if (agentOpts._beforeEvent) agentOpts._beforeEvent(event);
         // Inject workspace info into result events
         if (event.type === "result" && agentOpts.workspaceId) {
           event = { ...event, workspace_id: agentOpts.workspaceId };
@@ -2066,6 +2070,7 @@ async function handleAgentBuffered(req, res, start, prompt, agentOpts, sendJSON)
       ...agentOpts,
       onEvent: (event) => {
         events.push(event);
+        if (agentOpts._beforeEvent) agentOpts._beforeEvent(event);
 
         if (event.type === "system" && event.subtype === "init") {
           sessionId = event.session_id;
@@ -2664,7 +2669,7 @@ const server = http.createServer(async (req, res) => {
   const V1_ROUTES = [
     "/chat/completions", "/completions", "/models", "/messages",
     "/messages/count_tokens", "/agent", "/embeddings", "/responses", "/status",
-    "/files",
+    "/files", "/runs", "/stats",
   ];
   for (const route of V1_ROUTES) {
     if (url === route || ((route === "/models" || route === "/files") && url.startsWith(route + "/"))) {
@@ -2942,7 +2947,29 @@ const server = http.createServer(async (req, res) => {
 
       const stream = body.stream !== false; // default true
 
-      // Wrap the agent run to set workspace state on completion
+      // Log + wrap the agent run
+      const runId = db.logRunStart({
+        apiKeyId: authContext?.keyId,
+        orgId: authContext?.orgId,
+        sessionId: body.session_id,
+        workspaceId: wsId,
+        prompt: body.prompt,
+        systemPrompt: body.system_prompt,
+        backend: BACKEND,
+      });
+
+      // Capture result event for db logging
+      const runResult = { sessionId: null, numTurns: null, totalCostUsd: null, usage: null };
+      const origBeforeEvent = agentOpts._beforeEvent;
+      agentOpts._beforeEvent = (event) => {
+        if (event.type === "result") {
+          runResult.sessionId = event.session_id || null;
+          runResult.numTurns = event.num_turns || null;
+          runResult.totalCostUsd = event.total_cost_usd || null;
+          runResult.usage = event.usage || null;
+        }
+      };
+
       const runAgent = async () => {
         try {
           if (stream) {
@@ -2953,8 +2980,10 @@ const server = http.createServer(async (req, res) => {
             );
           }
           if (wsId) files.setWorkspaceState(wsId, "completed");
+          db.logRunComplete(runId, runResult);
         } catch (err) {
           if (wsId) files.setWorkspaceState(wsId, "error");
+          db.logRunComplete(runId, { error: err.message });
           throw err;
         }
       };
@@ -2965,6 +2994,46 @@ const server = http.createServer(async (req, res) => {
     // ----- Built-in MCP Server (Streamable HTTP) -----
     if (url === "/mcp" || url === "/v1/mcp") {
       return handleMcp(req, res, start, authContext);
+    }
+
+    // ----- Agent Runs: GET /v1/runs -----
+    if (url === "/v1/runs" && req.method === "GET") {
+      const params = new URL(req.url, BASE_URL).searchParams;
+      const limit = Math.min(parseInt(params.get("limit") || "50", 10), 200);
+      const offset = parseInt(params.get("offset") || "0", 10);
+      const result = db.listRuns({
+        limit, offset,
+        apiKeyId: params.get("key_id") || undefined,
+        orgId: authContext?.orgId || params.get("org_id") || undefined,
+        status: params.get("status") || undefined,
+      });
+      return sendJSON(200, result);
+    }
+
+    // ----- Agent Run Detail: GET /v1/runs/:id -----
+    if (url.startsWith("/v1/runs/") && req.method === "GET") {
+      const runId = decodeURIComponent(url.slice("/v1/runs/".length));
+      const run = db.getRun(runId);
+      if (!run) return sendJSON(404, { error: { message: "Run not found", type: "not_found" } });
+      return sendJSON(200, run);
+    }
+
+    // ----- Stats: GET /v1/stats -----
+    if (url === "/v1/stats" && req.method === "GET") {
+      const params = new URL(req.url, BASE_URL).searchParams;
+      const since = params.get("since") ? parseInt(params.get("since"), 10) : undefined;
+      const stats = db.getStats({
+        apiKeyId: params.get("key_id") || undefined,
+        orgId: authContext?.orgId || params.get("org_id") || undefined,
+        since,
+      });
+      return sendJSON(200, {
+        ...stats,
+        active_workers: activeWorkers,
+        queued: queue.length,
+        max_concurrency: MAX_CONCURRENCY,
+        backend: BACKEND,
+      });
     }
 
     // ----- File Upload: POST /v1/files/upload -----
@@ -3170,6 +3239,9 @@ async function start() {
   // Cleanup orphaned local workspace dirs from prior crashes
   files.cleanupOrphaned();
 
+  // Init database (optional — for agent run logging + dashboard)
+  if (DB_PATH) db.init(DB_PATH);
+
   if (BACKEND === "sprite") {
     await initSprites();
   }
@@ -3254,6 +3326,9 @@ function shutdown(signal) {
   for (const proc of activeProcesses) {
     proc.kill("SIGTERM");
   }
+
+  // Close database
+  db.close();
 
   // Clean up workspaces (fire-and-forget for remote)
   files.cleanupExpired(0).catch(() => {});
