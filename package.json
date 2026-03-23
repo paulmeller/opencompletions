@@ -12,6 +12,7 @@
   "dependencies": {
     "@anthropic-ai/claude-code": "^2.0.76",
     "@types/node": "^22.13.11",
-    "@workos-inc/node": "8.9.0"
+    "@workos-inc/node": "8.9.0",
+    "better-sqlite3": "11.9.1"
   }
 }
