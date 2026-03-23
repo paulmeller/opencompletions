@@ -132,3 +132,5 @@ dist
 # Replit debugger
 .breakpoints
 **/.claude-user/
+skills-config.json
+*.db

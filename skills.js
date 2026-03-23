@@ -66,6 +66,11 @@ function parseFrontmatter(content) {
     const m = line.match(/^(\w+)\s*:\s*(.+)$/);
     if (m) {
       let value = m[2].trim();
+      // Parse YAML-style arrays: [item1, item2] or [item1, item2]
+      if (value.startsWith("[") && value.endsWith("]")) {
+        meta[m[1].trim()] = value.slice(1, -1).split(",").map((s) => s.trim()).filter(Boolean);
+        continue;
+      }
       if (
         (value.startsWith('"') && value.endsWith('"')) ||
         (value.startsWith("'") && value.endsWith("'"))
@@ -96,10 +101,22 @@ function discoverSkills(skillsDir) {
         name: d.name,
         display_name: fm.name || d.name,
         description: fm.description || "",
+        tags: Array.isArray(fm.tags) ? fm.tags : [],
         dir: path.join(skillsDir, d.name),
       };
     })
     .filter(Boolean);
+}
+
+function isSkillAllowed(skill, permissions) {
+  if (!permissions) return true;
+  if (permissions.includes("*")) return true;
+  if (permissions.includes("skills:*")) return true;
+  if (permissions.includes(`skills:${skill.name}`)) return true;
+  for (const tag of skill.tags || []) {
+    if (permissions.includes(`skills:tag:${tag}`)) return true;
+  }
+  return false;
 }
 
 function loadSkillContent(skillsDir, skillName) {
@@ -224,9 +241,9 @@ function getToolDefinitions(scriptsEnabled, _permissions) {
   return tools;
 }
 
-async function handleToolCall(toolName, args, skillsDir, scriptsEnabled, _permissions) {
+async function handleToolCall(toolName, args, skillsDir, scriptsEnabled, permissions) {
   if (toolName === "list_skills") {
-    const skills = discoverSkills(skillsDir);
+    const skills = discoverSkills(skillsDir).filter((s) => isSkillAllowed(s, permissions));
     const catalog = skills.map((s) => ({
       name: s.name,
       display_name: s.display_name,
@@ -237,6 +254,12 @@ async function handleToolCall(toolName, args, skillsDir, scriptsEnabled, _permis
   }
 
   if (toolName === "activate_skill") {
+    // Check permission before activating
+    const skills = discoverSkills(skillsDir);
+    const skill = skills.find((s) => s.name === args.skill_name);
+    if (skill && !isSkillAllowed(skill, permissions)) {
+      return { content: [{ type: "text", text: `Access denied: ${args.skill_name}` }], isError: true };
+    }
     const content = loadSkillContent(skillsDir, args.skill_name);
     if (!content) {
       return { content: [{ type: "text", text: `Skill not found: ${args.skill_name}` }], isError: true };
@@ -245,6 +268,12 @@ async function handleToolCall(toolName, args, skillsDir, scriptsEnabled, _permis
   }
 
   if (toolName === "read_resource") {
+    // Check permission before reading
+    const skills = discoverSkills(skillsDir);
+    const skill = skills.find((s) => s.name === args.skill_name);
+    if (skill && !isSkillAllowed(skill, permissions)) {
+      return { content: [{ type: "text", text: `Access denied: ${args.skill_name}` }], isError: true };
+    }
     const result = readResource(skillsDir, args.skill_name, args.file_path);
     if (result.error) {
       return { content: [{ type: "text", text: result.error }], isError: true };
@@ -253,6 +282,12 @@ async function handleToolCall(toolName, args, skillsDir, scriptsEnabled, _permis
   }
 
   if (toolName === "run_script" && scriptsEnabled) {
+    // Check permission before running
+    const skills = discoverSkills(skillsDir);
+    const skill = skills.find((s) => s.name === args.skill_name);
+    if (skill && !isSkillAllowed(skill, permissions)) {
+      return { content: [{ type: "text", text: `Access denied: ${args.skill_name}` }], isError: true };
+    }
     const result = await runScript(skillsDir, args.skill_name, args.script_path);
     if (result.error) {
       return { content: [{ type: "text", text: result.error }], isError: true };

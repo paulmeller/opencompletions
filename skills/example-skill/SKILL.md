@@ -1,6 +1,7 @@
 ---
 name: example-skill
 description: A demo skill that shows how agent skills work. Use when you need to demonstrate the skills system.
+tags: [demo]
 ---
 
 # Example Skill

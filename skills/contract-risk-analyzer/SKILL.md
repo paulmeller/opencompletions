@@ -1,6 +1,7 @@
 ---
 name: contract-risk-analyzer
 description: Analyzes contract documents clause by clause and produces a structured risk assessment with per-clause ratings.
+tags: [legal, contracts]
 ---
 
 # Contract Risk Analyzer
