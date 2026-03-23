@@ -69,11 +69,11 @@ let workos = null;
 function initWorkos() {
   if (workos) return workos;
   try {
-    const WorkOS = require("@workos-inc/node").WorkOS;
+    const { WorkOS } = require("@workos-inc/node");
     workos = new WorkOS(process.env.WORKOS_API_KEY);
     return workos;
   } catch (err) {
-    console.error("[auth] WorkOS SDK not installed. Run: npm install @workos-inc/node@7.5.0");
+    console.error("[auth] WorkOS SDK not installed. Run: npm install @workos-inc/node");
     return null;
   }
 }
@@ -97,18 +97,20 @@ async function validateWorkos(bearerToken) {
   if (!sdk) return null;
 
   try {
-    const { apiKey } = await sdk.apiKeys.validateApiKey({ apiKey: bearerToken });
+    // WorkOS SDK v8+: apiKeys.validateApiKey({ value: "..." })
+    // Returns { apiKey: ApiKey | null }
+    // ApiKey: { id, owner: { type, id }, name, permissions: string[], ... }
+    const { apiKey } = await sdk.apiKeys.validateApiKey({ value: bearerToken });
     if (!apiKey) {
-      // Key invalid — do NOT cache failures
-      return null;
+      return null; // invalid — do NOT cache failures
     }
     const authContext = {
       keyId: apiKey.id,
-      orgId: apiKey.organizationId || null,
-      orgName: null,
-      permissions: (apiKey.permissions || []).map((p) => p.slug || p),
-      metadata: apiKey.metadata || {},
-      expiresAt: apiKey.expiresAt ? new Date(apiKey.expiresAt).getTime() : null,
+      orgId: apiKey.owner?.id || null,
+      orgName: apiKey.name || null,
+      permissions: apiKey.permissions || [],
+      metadata: {},
+      expiresAt: null,
       rateLimit: null,
     };
     workosCache.set(hash, { authContext, cachedAt: now });

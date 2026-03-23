@@ -110,11 +110,13 @@ function discoverSkills(skillsDir) {
 
 function isSkillAllowed(skill, permissions) {
   if (!permissions) return true;
+  if (permissions.length === 0) return true; // no restrictions set = allow all
   if (permissions.includes("*")) return true;
-  if (permissions.includes("skills:*")) return true;
-  if (permissions.includes(`skills:${skill.name}`)) return true;
+  if (permissions.includes("skills:*") || permissions.includes("skills-all")) return true;
+  // Support both colon and dash separators (WorkOS uses dashes)
+  if (permissions.includes(`skills:${skill.name}`) || permissions.includes(`skills-${skill.name}`)) return true;
   for (const tag of skill.tags || []) {
-    if (permissions.includes(`skills:tag:${tag}`)) return true;
+    if (permissions.includes(`skills:tag:${tag}`) || permissions.includes(`skills-tag-${tag}`)) return true;
   }
   return false;
 }
