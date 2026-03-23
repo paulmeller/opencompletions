@@ -174,7 +174,7 @@ function runScript(skillsDir, skillName, scriptPath) {
 // MCP tool definitions & handler
 // ---------------------------------------------------------------------------
 
-function getToolDefinitions(scriptsEnabled) {
+function getToolDefinitions(scriptsEnabled, _permissions) {
   const tools = [
     {
       name: "list_skills",
@@ -224,7 +224,7 @@ function getToolDefinitions(scriptsEnabled) {
   return tools;
 }
 
-async function handleToolCall(toolName, args, skillsDir, scriptsEnabled) {
+async function handleToolCall(toolName, args, skillsDir, scriptsEnabled, _permissions) {
   if (toolName === "list_skills") {
     const skills = discoverSkills(skillsDir);
     const catalog = skills.map((s) => ({

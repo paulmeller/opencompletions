@@ -87,6 +87,9 @@ const SKILLS_SCRIPTS_ENABLED = args.includes("--skills-scripts");
 const resolvedSkillsPath = SKILLS_PATH ? path.resolve(SKILLS_PATH) : "";
 const skillsModule = SKILLS_PATH ? require("./skills") : null;
 const API_KEY = flag("api-key", process.env.API_KEY || "");
+const AUTH_PROVIDER = flag("auth-provider", process.env.AUTH_PROVIDER || "none");
+const AUTH_CONFIG = flag("auth-config", process.env.AUTH_CONFIG || "");
+const authModule = AUTH_PROVIDER !== "none" ? (() => { try { return require("./auth"); } catch { return null; } })() : null;
 const MAX_FILE_SIZE = parseInt(flag("max-file-size", String(50 * 1024 * 1024)), 10);
 const MAX_WORKSPACE_SIZE = parseInt(flag("max-workspace-size", String(200 * 1024 * 1024)), 10);
 const WORKSPACE_TTL_MS = parseInt(flag("workspace-ttl", "3600000"), 10);
@@ -158,6 +161,8 @@ setInterval(() => {
     }
   }
 }, 30 * 60 * 1000);
+
+
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -2266,8 +2271,17 @@ const MCP_TOOLS = [
 ];
 
 const mcpSessions = new Map();
+const MCP_SESSION_TTL_MS = 30 * 60 * 1000;
+setInterval(() => {
+  const now = Date.now();
+  for (const [sid, session] of mcpSessions) {
+    if (now - session.created > MCP_SESSION_TTL_MS) {
+      mcpSessions.delete(sid);
+    }
+  }
+}, 5 * 60 * 1000);
 
-async function handleMcpJsonRpc(msg) {
+async function handleMcpJsonRpc(msg, authContext) {
   const { method, params, id } = msg;
 
   switch (method) {
@@ -2286,8 +2300,9 @@ async function handleMcpJsonRpc(msg) {
       return null;
 
     case "tools/list": {
+      const permissions = authContext?.permissions || null;
       const allTools = skillsModule
-        ? [...MCP_TOOLS, ...skillsModule.getToolDefinitions(SKILLS_SCRIPTS_ENABLED)]
+        ? [...MCP_TOOLS, ...skillsModule.getToolDefinitions(SKILLS_SCRIPTS_ENABLED, permissions)]
         : MCP_TOOLS;
       return { jsonrpc: "2.0", id, result: { tools: allTools } };
     }
@@ -2336,7 +2351,8 @@ async function handleMcpJsonRpc(msg) {
 
       // Skills tools (when --skills-path is configured)
       if (skillsModule) {
-        const result = await skillsModule.handleToolCall(toolName, args, resolvedSkillsPath, SKILLS_SCRIPTS_ENABLED);
+        const permissions = authContext?.permissions || null;
+        const result = await skillsModule.handleToolCall(toolName, args, resolvedSkillsPath, SKILLS_SCRIPTS_ENABLED, permissions);
         if (result) return { jsonrpc: "2.0", id, result };
       }
 
@@ -2356,7 +2372,7 @@ async function handleMcpJsonRpc(msg) {
   }
 }
 
-function handleMcp(req, res, startTime) {
+function handleMcp(req, res, startTime, authContext) {
   const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "POST, GET, DELETE, OPTIONS",
@@ -2406,15 +2422,28 @@ function handleMcp(req, res, startTime) {
 
     if (isInit) {
       sessionId = randomUUID();
-      mcpSessions.set(sessionId, { created: Date.now() });
+      mcpSessions.set(sessionId, { created: Date.now(), authContext });
     } else if (sessionId && !mcpSessions.has(sessionId)) {
       res.writeHead(400, { ...corsHeaders, "Content-Type": "application/json" });
       res.end(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32000, message: "Invalid session" } }));
       return;
+    } else if (sessionId) {
+      // Verify key matches the session's bound key
+      const session = mcpSessions.get(sessionId);
+      if (session.authContext && authContext && session.authContext.keyId !== authContext.keyId) {
+        res.writeHead(403, { ...corsHeaders, "Content-Type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32000, message: "Key mismatch for session" } }));
+        return;
+      }
     }
 
+    // Use session's authContext (bound at init) for permission checks
+    const sessionAuth = sessionId && mcpSessions.has(sessionId)
+      ? mcpSessions.get(sessionId).authContext
+      : authContext;
+
     for (const m of messages) {
-      const response = await handleMcpJsonRpc(m);
+      const response = await handleMcpJsonRpc(m, sessionAuth);
       if (response) responses.push(response);
     }
 
@@ -2590,19 +2619,36 @@ const server = http.createServer(async (req, res) => {
   const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
   const xApiKey = req.headers["x-api-key"] || "";
 
-  if (API_KEY) {
-    // Bearer token must match the server API key
+  // Authenticate and produce authContext (null = no auth provider, allow all)
+  let authContext = null;
+  if (AUTH_PROVIDER !== "none" && authModule) {
+    // Check legacy --api-key bypass first (dual-mode migration)
+    let isLegacyAdmin = false;
+    if (API_KEY && bearerToken) {
+      const a = Buffer.from(bearerToken);
+      const b = Buffer.from(API_KEY);
+      isLegacyAdmin = a.length === b.length && timingSafeEqual(a, b);
+    }
+    if (isLegacyAdmin) {
+      authContext = { keyId: "__admin__", orgId: null, orgName: null, permissions: ["*"], metadata: {}, expiresAt: null, rateLimit: null };
+    } else {
+      authContext = await authModule.validateKey(bearerToken, AUTH_PROVIDER, AUTH_CONFIG);
+      if (!authContext) {
+        return sendJSON(401, {
+          error: { message: "Invalid API key", type: "authentication_error", code: 401 },
+        });
+      }
+    }
+  } else if (API_KEY) {
+    // Legacy mode: single shared --api-key
     const a = Buffer.from(bearerToken || xApiKey);
     const b = Buffer.from(API_KEY);
     if (a.length !== b.length || !timingSafeEqual(a, b)) {
       return sendJSON(401, {
-        error: {
-          message: "Invalid API key",
-          type: "authentication_error",
-          code: 401,
-        },
+        error: { message: "Invalid API key", type: "authentication_error", code: 401 },
       });
     }
+    // authContext stays null — means "allow all" (backward compat)
   }
 
   // x-api-key is forwarded to the backend as the provider token (any provider)
@@ -2915,7 +2961,7 @@ const server = http.createServer(async (req, res) => {
 
     // ----- Built-in MCP Server (Streamable HTTP) -----
     if (url === "/mcp" || url === "/v1/mcp") {
-      return handleMcp(req, res, start);
+      return handleMcp(req, res, start, authContext);
     }
 
     // ----- File Upload: POST /v1/files/upload -----
