@@ -177,6 +177,19 @@ if (!VALID_BACKENDS.includes(BACKEND)) {
   );
   process.exit(1);
 }
+
+// Build set of available backends (local always, others if credentials present)
+const AVAILABLE_BACKENDS = new Set(["local"]);
+if (SPRITE_TOKEN && SPRITE_NAMES.length > 0) AVAILABLE_BACKENDS.add("sprite");
+if (VERCEL_TOKEN && VERCEL_TEAM_ID) AVAILABLE_BACKENDS.add("vercel");
+if (!AVAILABLE_BACKENDS.has(BACKEND)) {
+  const missing = BACKEND === "sprite"
+    ? "--sprite-token and --sprite-name"
+    : "--vercel-token and --vercel-team-id";
+  console.error(`Error: ${missing} required for --backend ${BACKEND}`);
+  process.exit(1);
+}
+
 for (const [name, val] of [
   ["port", PORT],
   ["concurrency", MAX_CONCURRENCY],
@@ -194,30 +207,6 @@ if (!API_KEY) {
   console.warn(
     "WARNING: No --api-key configured. Server is open to all requests.",
   );
-}
-if (BACKEND === "sprite" && !SPRITE_TOKEN) {
-  console.error(
-    "Error: --sprite-token or SPRITE_TOKEN env var required for sprite backend",
-  );
-  process.exit(1);
-}
-if (BACKEND === "sprite" && SPRITE_NAMES.length === 0) {
-  console.error(
-    "Error: at least one --sprite-name required for sprite backend",
-  );
-  process.exit(1);
-}
-if (BACKEND === "vercel" && !VERCEL_TOKEN) {
-  console.error(
-    "Error: --vercel-token or VERCEL_TOKEN env var required for vercel backend",
-  );
-  process.exit(1);
-}
-if (BACKEND === "vercel" && !VERCEL_TEAM_ID) {
-  console.error(
-    "Error: --vercel-team-id or VERCEL_TEAM_ID env var required for vercel backend",
-  );
-  process.exit(1);
 }
 const VALID_CLIS = ["claude", "opencode"];
 if (!VALID_CLIS.includes(CLI_NAME)) {
@@ -315,7 +304,7 @@ function drain() {
         sprite: runAgentOnSprite,
         vercel: runAgentOnVercel,
       };
-      const agentFn = agentFns[BACKEND];
+      const agentFn = agentFns[job.agentOpts?.backend || BACKEND];
 
       const run = async () => {
         try {
@@ -809,7 +798,7 @@ function runAgentLocal(prompt, opts, onEvent) {
     if (!CLI.promptViaStdin) cliArgs.push(CLI.wrapPrompt(prompt, opts.systemPrompt));
     const env = { ...process.env, ...CLI.buildAuthEnv(opts.clientToken), ...CLI.buildMcpEnv(opts) };
     const spawnOpts = { stdio: ["pipe", "pipe", "pipe"], env };
-    if (opts.workspaceCwd && BACKEND === "local") {
+    if (opts.workspaceCwd) {
       spawnOpts.cwd = opts.workspaceCwd;
     } else if (opts.cwd) {
       spawnOpts.cwd = opts.cwd;
@@ -2669,7 +2658,7 @@ const server = http.createServer(async (req, res) => {
   const V1_ROUTES = [
     "/chat/completions", "/completions", "/models", "/messages",
     "/messages/count_tokens", "/agent", "/embeddings", "/responses", "/status",
-    "/files", "/runs", "/stats",
+    "/files", "/runs", "/stats", "/backends",
   ];
   for (const route of V1_ROUTES) {
     if (url === route || ((route === "/models" || route === "/files") && url.startsWith(route + "/"))) {
@@ -2856,12 +2845,33 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ----- Queue status -----
+    // ----- Backends: GET /v1/backends -----
+    if (url === "/v1/backends" && req.method === "GET") {
+      const details = { local: { status: "ready" } };
+      if (AVAILABLE_BACKENDS.has("sprite")) {
+        details.sprite = { status: "ready", pool_size: spritePool.length, busy: spritePool.reduce((s, sp) => s + sp.busy, 0) };
+      }
+      if (AVAILABLE_BACKENDS.has("vercel")) {
+        details.vercel = { status: "ready", pool_size: vercelPool.length, busy: vercelPool.reduce((s, sb) => s + sb.busy, 0) };
+      }
+      return sendJSON(200, { default: BACKEND, available: [...AVAILABLE_BACKENDS], details });
+    }
+
     // ----- Agent API: POST /v1/agent -----
     if (url === "/v1/agent" && req.method === "POST") {
       const body = await parseBody(req);
       if (!body.prompt) {
         const err = errorResponse(400, "prompt is required");
         return sendJSON(err.status, err.body);
+      }
+
+      // Per-request backend selection (falls back to server default)
+      const requestBackend = body.backend || BACKEND;
+      if (!AVAILABLE_BACKENDS.has(requestBackend)) {
+        return sendJSON(400, { error: {
+          message: `Backend "${requestBackend}" is not available. Available: ${[...AVAILABLE_BACKENDS].join(", ")}`,
+          type: "invalid_request_error",
+        }});
       }
 
       // Validate unsupported features for non-claude CLIs
@@ -2892,13 +2902,13 @@ const server = http.createServer(async (req, res) => {
         }
         // Validate session_id + workspace_id don't conflict on backend binding
         if (body.session_id) {
-          if (BACKEND === "sprite") {
+          if (requestBackend === "sprite") {
             const wsSprite = workspaceToSprite.get(wsId);
             const sessSprite = sessionToSprite.get(body.session_id);
             if (wsSprite && sessSprite && wsSprite !== sessSprite) {
               return sendJSON(409, { error: { message: "workspace_id and session_id are bound to different sprites", type: "conflict" } });
             }
-          } else if (BACKEND === "vercel") {
+          } else if (requestBackend === "vercel") {
             const wsSandbox = workspaceToSandbox.get(wsId);
             const sessSandbox = sessionToSandbox.get(body.session_id);
             if (wsSandbox && sessSandbox && wsSandbox !== sessSandbox) {
@@ -2907,7 +2917,7 @@ const server = http.createServer(async (req, res) => {
           }
         }
         // Pre-run validation: verify workspace dir still exists on remote
-        if (BACKEND !== "local") {
+        if (requestBackend !== "local") {
           const exists = await files.validateWorkspaceExists(wsId);
           if (!exists) {
             files.setWorkspaceState(wsId, "error");
@@ -2933,6 +2943,7 @@ const server = http.createServer(async (req, res) => {
         timeoutMs: body.timeout_ms || null,
         workspaceId: wsId,
         workspaceCwd,
+        backend: requestBackend,
       };
 
       // Auto-inject file manifest into system prompt
@@ -2955,7 +2966,7 @@ const server = http.createServer(async (req, res) => {
         workspaceId: wsId,
         prompt: body.prompt,
         systemPrompt: body.system_prompt,
-        backend: BACKEND,
+        backend: requestBackend,
       });
 
       // Capture result event for db logging
@@ -3242,10 +3253,10 @@ async function start() {
   // Init database (optional — for agent run logging + dashboard)
   if (DB_PATH) db.init(DB_PATH);
 
-  if (BACKEND === "sprite") {
+  if (AVAILABLE_BACKENDS.has("sprite")) {
     await initSprites();
   }
-  if (BACKEND === "vercel") {
+  if (AVAILABLE_BACKENDS.has("vercel")) {
     await initVercelPool();
   }
 
