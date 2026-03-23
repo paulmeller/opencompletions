@@ -3231,6 +3231,8 @@ const server = http.createServer(async (req, res) => {
         prompt: body.prompt,
         systemPrompt: body.system_prompt,
         backend: requestBackend,
+        cli: CLI.name,
+        model: body.model || null,
       });
 
       // Capture result event for db logging

@@ -59,21 +59,29 @@ function migrate() {
       PRAGMA user_version = 1;
     `);
   }
+
+  if (version < 2) {
+    sqlite.exec(`
+      ALTER TABLE agent_runs ADD COLUMN cli TEXT;
+      ALTER TABLE agent_runs ADD COLUMN model TEXT;
+      PRAGMA user_version = 2;
+    `);
+  }
 }
 
 // ---------------------------------------------------------------------------
 // CRUD
 // ---------------------------------------------------------------------------
 
-function logRunStart({ apiKeyId, orgId, sessionId, workspaceId, prompt, systemPrompt, backend }) {
+function logRunStart({ apiKeyId, orgId, sessionId, workspaceId, prompt, systemPrompt, backend, cli, model }) {
   if (!sqlite) return null;
   const id = randomUUID();
   const now = Date.now();
   sqlite.prepare(`
-    INSERT INTO agent_runs (id, api_key_id, org_id, session_id, workspace_id, prompt, system_prompt, backend, status, started_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)
+    INSERT INTO agent_runs (id, api_key_id, org_id, session_id, workspace_id, prompt, system_prompt, backend, cli, model, status, started_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)
   `).run(id, apiKeyId || null, orgId || null, sessionId || null, workspaceId || null,
-    prompt || null, systemPrompt || null, backend || null, now);
+    prompt || null, systemPrompt || null, backend || null, cli || null, model || null, now);
   return id;
 }
 
@@ -101,7 +109,7 @@ function listRuns({ limit = 50, offset = 0, apiKeyId, orgId, status } = {}) {
   const total = sqlite.prepare(`SELECT COUNT(*) as c FROM agent_runs WHERE ${where}`).get(...params).c;
   const runs = sqlite.prepare(`
     SELECT id, api_key_id, org_id, session_id, workspace_id,
-           prompt, backend, status, num_turns, total_cost_usd,
+           prompt, backend, cli, model, status, num_turns, total_cost_usd,
            error_message, started_at, completed_at
     FROM agent_runs WHERE ${where} ORDER BY started_at DESC LIMIT ? OFFSET ?
   `).all(...params, limit, offset);
