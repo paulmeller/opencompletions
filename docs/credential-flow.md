@@ -1,286 +1,288 @@
-# Credential Flow: Single-Token Auth
+# Single-Token Credential Flow
 
-## Problem
+## Why
 
-Today, clients need up to two tokens per request:
+Running an OpenCompletions deployment today requires juggling multiple secrets across multiple places:
 
-1. **Gateway token** (`Authorization: Bearer`) — authenticates the caller to the server (WorkOS API key or shared `--api-key`)
-2. **LLM token** (`x-api-key` header) — forwarded to the CLI as `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`
+- The **client** needs two tokens per request: a gateway token (`Authorization: Bearer`) to authenticate to the server, and an LLM token (`x-api-key`) to forward to the CLI for Anthropic API access.
+- The **server operator** needs to configure backend infrastructure credentials (Sprite tokens, Vercel PATs) and server auth keys via CLI flags or env vars.
+- **Rotating any credential** means touching env vars, restarting the server, or updating client config.
 
-Backend credentials (sprite/vercel) are always server-side config and not client-facing.
+This is workable for a single developer, but doesn't scale to a multi-org deployment where the dashboard manages organizations and their API keys via WorkOS.
 
-The goal: a client sends **only their WorkOS API key**. The server resolves the LLM credential from the dashboard's credential store, so the client never needs to know or manage an Anthropic key.
+## Goal
 
-## Current Token Resolution (server.js `buildAuthEnv`)
-
-```
-x-api-key header          (per-request, client-provided)
-  | empty?
---anthropic-api-key        (server-wide fallback)
-  | empty?
---claude-token             (server-wide OAuth fallback)
-```
-
-This works for single-tenant deployments where one Anthropic key serves everyone. It does not support per-org keys.
-
-## Proposed Token Resolution
+A client sends **one token** — their WorkOS API key. Everything else is resolved server-side:
 
 ```
-x-api-key header                (per-request override — power users, testing)
-  | empty?
-credential store lookup by org  (per-org, stored in dashboard)
-  | empty?
---anthropic-api-key             (server-wide fallback)
-  | empty?
---claude-token                  (server-wide OAuth fallback)
+Client                         Server                         Dashboard
+  |                              |                               |
+  |-- Bearer <workos-key> ------>|                               |
+  |                              |-- validate key --------------->| WorkOS
+  |                              |<-- orgId, permissions ---------|
+  |                              |                               |
+  |                              |-- GET /api/credentials/org_X ->|
+  |                              |<-- { anthropicApiKey: "..." } -|
+  |                              |                               |
+  |                              |   (backend creds already       |
+  |                              |    configured at startup       |
+  |                              |    by dashboard)               |
+  |                              |                               |
+  |                              |-- spawn CLI w/ ANTHROPIC_API_KEY
+  |<---- response ---------------|
 ```
 
-## Changes: OpenCompletions Server
+## Three Categories of Credentials
 
-### 1. Add credential store interface (`auth.js`)
+| Category | Examples | Who provides today | Who should provide |
+|----------|---------|-------------------|-------------------|
+| **LLM** | `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` | Client via `x-api-key` header, or server-wide fallback | Dashboard, per-org |
+| **Backend** | `SPRITE_TOKEN`, `SPRITE_NAME`, `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, `VERCEL_PROJECT_ID`, `VERCEL_SNAPSHOT_ID` | Server operator via CLI flags | Dashboard, at server startup |
+| **Server auth** | `API_KEY` (gateway), `WORKOS_API_KEY` (token validation) | Server operator via CLI flags | Dashboard, at server startup |
 
-New export: `getCredentials(orgId) -> { anthropicApiKey?, claudeOauthToken? } | null`
+**LLM credentials** change per-org and rotate frequently. They must be resolved per-request.
 
-The store backing is pluggable (same pattern as auth providers):
+**Backend and server auth credentials** are infrastructure config. They change rarely and apply to the whole server process. They're set at startup time.
 
-- **config provider**: credentials live in the same JSON config file under each key's entry:
-  ```json
-  {
-    "keys": {
-      "key_abc123": {
-        "keyId": "key_abc123",
-        "orgId": "org_456",
-        "permissions": ["*"],
-        "credentials": {
-          "anthropicApiKey": "sk-ant-api03-...",
-        }
-      }
-    }
-  }
-  ```
+---
 
-- **workos provider**: credentials fetched from dashboard API (see Dashboard changes below). Cached with the same TTL as auth validation (60s fresh, 5min grace).
+## Changes: `opencompletions` (server)
 
-### 2. Wire `authContext` into `buildAuthEnv` (`server.js`)
+### 1. New credential resolution in `buildAuthEnv` (server.js)
 
-Current signature:
+Today's resolution:
+
+```
+x-api-key header        → per-request, client-provided
+  ↓ empty?
+--anthropic-api-key     → server-wide fallback
+  ↓ empty?
+--claude-token          → server-wide OAuth fallback
+```
+
+New resolution (insert one step):
+
+```
+x-api-key header        → per-request override (power users, testing)
+  ↓ empty?
+credential store by org → per-org, fetched from dashboard       ← NEW
+  ↓ empty?
+--anthropic-api-key     → server-wide fallback
+  ↓ empty?
+--claude-token          → server-wide OAuth fallback
+```
+
+The function signature changes from `buildAuthEnv(clientToken)` to `buildAuthEnv(clientToken, authContext)`. When `clientToken` is empty and `authContext.orgId` is present, the server calls the dashboard's credential API to fetch the org's LLM key.
+
+### 2. New `getCredentials` export in auth.js
+
 ```js
-function buildAuthEnv(clientToken)
+// auth.js — new export
+async function getCredentials(orgId) → { anthropicApiKey?, claudeOauthToken? } | null
 ```
 
-New signature:
-```js
-function buildAuthEnv(clientToken, authContext)
-```
+Two backing implementations (matching existing auth provider pattern):
 
-Implementation:
-```js
-function buildAuthEnv(clientToken, authContext) {
-  const env = { ANTHROPIC_API_KEY: "", CLAUDE_CODE_OAUTH_TOKEN: "" };
+- **config provider**: reads credentials from the same JSON config file, under `keys[].credentials`.
+- **workos provider**: calls the dashboard API (`GET /api/credentials/:orgId`), cached with the same TTL as auth validation (60s fresh, 5min grace on outage).
 
-  // Priority 1: per-request client token (x-api-key header)
-  const token = clientToken || null;
-  if (token) {
-    if (token.startsWith("sk-ant-oat")) {
-      env.CLAUDE_CODE_OAUTH_TOKEN = token;
-    } else {
-      env.ANTHROPIC_API_KEY = token;
-    }
-    return env;
-  }
+### 3. Thread `authContext` through call sites
 
-  // Priority 2: per-org credentials from dashboard store
-  if (authContext?.orgId && authModule?.getCredentials) {
-    const creds = authModule.getCredentials(authContext.orgId);
-    if (creds?.anthropicApiKey) {
-      env.ANTHROPIC_API_KEY = creds.anthropicApiKey;
-      return env;
-    }
-    if (creds?.claudeOauthToken) {
-      env.CLAUDE_CODE_OAUTH_TOKEN = creds.claudeOauthToken;
-      return env;
-    }
-  }
-
-  // Priority 3: server-wide fallback
-  if (CONFIGURED_API_KEY) {
-    env.ANTHROPIC_API_KEY = CONFIGURED_API_KEY;
-  } else if (CONFIGURED_OAUTH_TOKEN) {
-    env.CLAUDE_CODE_OAUTH_TOKEN = CONFIGURED_OAUTH_TOKEN;
-  }
-  return env;
-}
-```
-
-### 3. Pass `authContext` through call sites
-
-Every place that calls `buildAuthEnv(clientToken)` needs the auth context passed through:
+`authContext` is already available in the HTTP request handler. It needs to be passed through to every function that calls `buildAuthEnv`:
 
 - `runClaudeLocal` / `runClaudeLocalStreaming` / `runAgentLocal`
 - `buildSpriteBody` / `runClaudeOnSprite` / `runClaudeSpriteStreaming` / `runAgentOnSprite`
 - `runClaudeOnVercel` / `runClaudeVercelStreaming` / `runAgentOnVercel`
 
-The `authContext` is already available in the request handler and passed to `enqueue()` — it just needs to be threaded into the exec functions.
+This is mechanical — adding one parameter to each function and passing it through `enqueue()`.
 
-### 4. Credential store cache
+### 4. New server flag: `--credentials-url`
 
-For the WorkOS provider, credential lookups should be cached alongside the auth validation to avoid an extra API call per request. The `workosCache` already stores `authContext` — extend it to include the resolved credentials:
-
-```js
-workosCache: hash -> { authContext, credentials, cachedAt }
+```
+node server.js \
+  --auth-provider workos \
+  --credentials-url https://dashboard.example.com/api/credentials \
+  --credentials-key <shared-secret>
 ```
 
-## Changes: Dashboard
+When set, `getCredentials(orgId)` calls `GET <credentials-url>/<orgId>` with the shared secret as a Bearer token.
 
-### 1. Credential storage
+### Scope
 
-The dashboard needs a secure store for **three categories** of credentials per org:
+| File | Change | Size |
+|------|--------|------|
+| `server.js` | Add `authContext` param to `buildAuthEnv` + all call sites | ~20 lines |
+| `auth.js` | Add `getCredentials()` with config + HTTP providers, caching | ~60 lines |
 
-| Category | Keys | What they do |
-|----------|------|-------------|
-| **LLM credentials** | `anthropicApiKey`, `claudeOauthToken` | Forwarded to the CLI as `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` to authenticate with the LLM provider |
-| **Backend credentials** | `spriteToken`, `spriteNames[]`, `vercelToken`, `vercelTeamId`, `vercelProjectId`, `vercelSnapshotId` | Infrastructure keys that tell the server how to reach the execution backend (Sprite VMs or Vercel sandboxes) |
-| **Server auth** | `apiKey` (the `--api-key` value), `workosApiKey` (server-side `WORKOS_API_KEY` for validating client tokens) | Keys that configure the server's own auth layer |
+---
 
-All three categories are required for a fully functional deployment. Today they're all passed as CLI flags or env vars by whoever operates the server. The dashboard should own and provision all of them so that spinning up a new org or rotating a key doesn't require redeploying the server.
+## Changes: `opencompletions-dashboard`
 
-Requirements:
+### 1. Credential storage (DB)
 
-- Encrypted at rest (not plaintext in a database)
-- Scoped per `orgId`
-- CRUD via the dashboard UI (org admins can manage their own; platform admins can manage backend/server keys)
-- Audit log for every credential change
+New table for encrypted credentials, scoped per org:
 
-Schema (conceptual):
-```
-org_credentials:
-  orgId              TEXT PRIMARY KEY
+```sql
+CREATE TABLE org_credentials (
+  org_id          TEXT NOT NULL,
+  key_name        TEXT NOT NULL,        -- e.g. 'anthropicApiKey', 'spriteToken'
+  encrypted_value BLOB NOT NULL,        -- AES-256-GCM with server-side key
+  updated_at      TIMESTAMP DEFAULT NOW(),
+  updated_by      TEXT,                 -- user ID who last changed it
+  PRIMARY KEY (org_id, key_name)
+);
 
-  -- LLM credentials
-  anthropicApiKey    TEXT ENCRYPTED
-  claudeOauthToken   TEXT ENCRYPTED
-
-  -- Backend credentials
-  backend            TEXT ("local" | "sprite" | "vercel")
-  spriteToken        TEXT ENCRYPTED
-  spriteNames        TEXT (JSON array, e.g. ["worker-1", "worker-2"])
-  vercelToken        TEXT ENCRYPTED
-  vercelTeamId       TEXT
-  vercelProjectId    TEXT
-  vercelSnapshotId   TEXT
-
-  -- Server auth
-  serverApiKey       TEXT ENCRYPTED  (the --api-key value for this org's server)
-  workosApiKey       TEXT ENCRYPTED  (WORKOS_API_KEY for token validation)
-
-  -- Metadata
-  updatedAt          TIMESTAMP
-  updatedBy          TEXT (user who last changed it)
+CREATE TABLE credential_audit_log (
+  id         TEXT PRIMARY KEY,
+  org_id     TEXT NOT NULL,
+  key_name   TEXT NOT NULL,             -- which credential changed
+  action     TEXT NOT NULL,             -- 'created', 'rotated', 'revoked'
+  actor      TEXT NOT NULL,             -- user ID
+  created_at TIMESTAMP DEFAULT NOW()
+);
 ```
 
-Note: Not every org needs every field. A local-backend org only needs LLM + server auth credentials. A sprite-backend org additionally needs `spriteToken` + `spriteNames`. The dashboard UI should show/hide fields based on the selected backend.
+Encryption key comes from a `CREDENTIALS_ENCRYPTION_KEY` env var. All credential values are encrypted before storage and decrypted only when served to the OC server.
 
-### 2. Credential API endpoint
+### 2. Server-to-server credential API
 
-The OpenCompletions server needs to fetch credentials after validating a WorkOS token. Two options:
-
-**Option A: Pull model** — server calls dashboard API to fetch credentials by orgId.
+One endpoint, called by the OpenCompletions server on each request (cached):
 
 ```
 GET /api/credentials/:orgId
-Authorization: Bearer <server-to-server-key>
-→ {
-    "llm": { "anthropicApiKey": "sk-ant-...", "claudeOauthToken": null },
-    "backend": { "type": "sprite", "spriteToken": "...", "spriteNames": ["w-1", "w-2"] },
-    "auth": { "serverApiKey": "...", "workosApiKey": "..." }
-  }
+Authorization: Bearer <shared-secret>
+
+200 OK
+{
+  "anthropicApiKey": "sk-ant-api03-...",
+  "claudeOauthToken": null
+}
 ```
 
-Pros: simple, stateless server. Cons: extra network hop per request (mitigated by caching).
+Only returns LLM credentials. Backend and server auth credentials are not served here — they're used at server startup (see section 4).
 
-**Option B: Push model** — dashboard syncs credentials to the server on change.
+Auth: shared secret (`CREDENTIALS_API_KEY` env var on the dashboard, `--credentials-key` flag on the OC server). Timing-safe comparison.
 
-The dashboard calls a new admin endpoint on the server to upsert credentials:
+Error responses:
+- `401` — bad or missing shared secret
+- `404` — org has no stored credentials (server falls through to its own fallback)
+
+### 3. Dashboard CRUD API (for the UI)
+
 ```
-PUT /v1/admin/credentials/:orgId
-Authorization: Bearer <admin-key>
-{ "llm": { "anthropicApiKey": "sk-ant-..." }, "backend": { ... } }
+GET    /api/orgs/:orgId/credentials              → all credentials (masked)
+PUT    /api/orgs/:orgId/credentials/llm           → upsert LLM keys
+PUT    /api/orgs/:orgId/credentials/backend       → upsert backend config
+PUT    /api/orgs/:orgId/credentials/auth          → upsert server auth keys
+DELETE /api/orgs/:orgId/credentials/:keyName      → revoke a specific credential
 ```
 
-Server stores in-memory (or in the SQLite DB if `--db` is configured). No per-request lookup needed.
+All responses mask credential values (show prefix + last 4 chars). Full values are never returned to the UI after initial save.
 
-Pros: zero latency. Cons: server needs state, sync can drift.
+### 4. Server provisioning
 
-**Recommendation: Option A (pull) with aggressive caching.** The auth validation already makes a per-request call to WorkOS (cached 60s). Piggyback the credential lookup onto the same cache entry. The dashboard API is a simple authenticated read.
+The dashboard stores backend and server auth credentials, and uses them to configure the OC server process at startup. This means the dashboard generates the server's environment:
 
-### 3. Server provisioning
+```json
+{
+  "backend": "sprite",
+  "spriteToken": "...",
+  "spriteNames": ["worker-1", "worker-2"],
+  "apiKey": "...",
+  "workosApiKey": "...",
+  "credentialsUrl": "https://dashboard.example.com/api/credentials",
+  "credentialsKey": "..."
+}
+```
 
-Backend and server auth credentials raise a bigger question: **who starts the server?**
+This could be:
+- An env file written to disk and used by the process manager
+- Docker/container env vars set by the deployment pipeline
+- A startup script generated by the dashboard
 
-Today the server is started manually with CLI flags. For the dashboard to fully own credentials, there are two models:
+The exact mechanism depends on how the server is deployed. The point is: the dashboard is the source of truth for all credentials, and the operator doesn't manually configure them.
 
-**Model 1: Dashboard provisions the server process.** The dashboard starts/restarts the OpenCompletions server with the right `--backend`, `--sprite-token`, `--vercel-token`, etc. flags from the credential store. Credential rotation = server restart. This is the simplest model for single-org deployments.
+When backend or server auth credentials are rotated in the dashboard, the server needs a restart. LLM credentials (fetched per-request) do not require a restart.
 
-**Model 2: Server pulls all config at runtime.** The server starts with minimal config (just `--auth-provider workos` and a dashboard URL). On first request for an org, it fetches backend config + LLM credentials from the dashboard. This supports multi-org on one server but requires the server to dynamically switch backends per request — a larger refactor.
+### 5. Dashboard UI
 
-For now, **Model 1 is simpler** and aligns with how things work today. The dashboard stores the credentials and uses them to generate the server's startup command / environment. Backend credentials change rarely (unlike LLM keys), so restart-on-change is acceptable.
+Org settings page, three sections:
 
-LLM credentials (which rotate more often) still use the pull-per-request model from the previous section.
+**LLM Credentials** (org admins can manage):
+- Anthropic API Key — masked input, show `sk-ant-...XY4z` after save
+- Claude OAuth Token — same masking
+- "Test" button — validates against Anthropic's API
+- Save / Revoke
 
-### 4. Dashboard UI
-
-Org settings page needs three sections:
-
-**LLM Credentials:**
-- Input fields for Anthropic API key and/or OAuth token
-- Key is masked after save (show last 4 chars only)
-- "Test" button that validates the key against Anthropic's API
-- Rotation support: save a new key, old one is immediately replaced
-
-**Backend Configuration:**
-- Backend type selector (local / sprite / vercel)
-- Conditional fields based on backend:
-  - Sprite: token, sprite names (add/remove from pool)
+**Backend Configuration** (platform admins):
+- Backend type dropdown: local / sprite / vercel
+- Conditional fields:
+  - Sprite: token, sprite names (add/remove)
   - Vercel: token, team ID, project ID, snapshot ID
   - Local: no extra fields
-- "Test connection" button that validates the backend is reachable
+- "Test connection" button
 
-**Server Auth:**
-- Server API key (the `--api-key` value)
-- WorkOS API key (for the server's `WORKOS_API_KEY`)
-- Auto-generate option for the server API key
+**Server Auth** (platform admins):
+- Server API key — auto-generate or manual entry
+- WorkOS API key
+- These configure the OC server's auth layer
 
-All sections:
-- Audit log: who changed what credential and when
-- Masked display (show last 4 chars only)
+All sections show masked values and link to the audit log.
 
-### 5. Dashboard-to-server auth
+---
 
-The credential API endpoint needs its own authentication. Options:
+## The Contract Between Systems
 
-- Shared secret (`DASHBOARD_API_KEY` env var on both sides)
-- mTLS between dashboard and server
-- WorkOS service account key
+```
+┌──────────────────────────────────────────────────────────┐
+│                    Dashboard                              │
+│                                                          │
+│  ┌─────────────┐  ┌──────────────┐  ┌────────────────┐  │
+│  │ LLM creds   │  │ Backend creds│  │ Server auth    │  │
+│  │ (per-org)   │  │ (per-server) │  │ (per-server)   │  │
+│  └──────┬──────┘  └──────┬───────┘  └───────┬────────┘  │
+│         │                │                   │           │
+│         │          At startup time           │           │
+│         │          (env vars / flags)        │           │
+│         │                │                   │           │
+└─────────┼────────────────┼───────────────────┼───────────┘
+          │                │                   │
+          │    ┌───────────▼───────────────────▼──────┐
+          │    │      OpenCompletions Server           │
+          │    │                                       │
+          │    │  --backend sprite                     │
+          │    │  --sprite-token <from dashboard>      │
+          │    │  --api-key <from dashboard>           │
+          │    │  --auth-provider workos               │
+          │    │  --credentials-url <dashboard URL>    │
+          │    │                                       │
+          ▼    │                                       │
+   Per-request │                                       │
+   GET /api/   │  buildAuthEnv(clientToken, authCtx)   │
+   credentials │    1. x-api-key header?               │
+   /:orgId     │    2. dashboard credential store?  ◄──┼── this is the new step
+               │    3. --anthropic-api-key fallback?   │
+               │    4. --claude-token fallback?         │
+               └───────────────────────────────────────┘
+```
 
-The simplest starting point is a shared secret configured on both the dashboard and the OpenCompletions server.
+The **only runtime contract** between the two systems is:
 
-## Migration / Backward Compatibility
+```
+GET /api/credentials/:orgId
+Authorization: Bearer <shared-secret>
+→ { "anthropicApiKey": "...", "claudeOauthToken": "..." }
+```
 
-All changes are additive. Existing deployments continue to work:
+Everything else (backend config, server auth) flows at deploy/startup time through environment variables or CLI flags that the dashboard generates.
 
-- No `authContext`? → `buildAuthEnv` skips the credential lookup, falls through to existing behavior
-- No credential store configured? → same as today
-- Client sends `x-api-key`? → still takes priority (power users, testing, gradual migration)
+---
 
-The `x-api-key` header remains the escape hatch for clients that want to manage their own keys.
+## Backward Compatibility
 
-## Summary
+All changes are additive:
 
-| Component | Change | Scope |
-|-----------|--------|-------|
-| **server.js** | Thread `authContext` into `buildAuthEnv`, add credential lookup step | ~20 lines changed across call sites |
-| **auth.js** | Add `getCredentials(orgId)` with cache, config + workos providers | ~50 lines new |
-| **Dashboard API** | New `GET /api/credentials/:orgId` endpoint (LLM, backend, auth) | New route + controller |
-| **Dashboard DB** | `org_credentials` table with encryption (3 credential categories) | New migration |
-| **Dashboard UI** | Org settings: LLM credentials, backend config, server auth | 3 new UI sections |
-| **Dashboard provisioning** | Use stored backend + auth credentials to start/configure server | Startup script / deploy pipeline |
+- **No dashboard?** Server works exactly as today. `buildAuthEnv` skips the credential lookup and falls through to `--anthropic-api-key` / `--claude-token`.
+- **No `--credentials-url`?** Same — no per-org lookup, server-wide fallback only.
+- **Client sends `x-api-key`?** Still takes priority. Power users and testing workflows are unaffected.
+- **No WorkOS?** The `--api-key` (shared secret) auth mode still works. The credential store also works with the `config` provider (JSON file) for dev/test.
