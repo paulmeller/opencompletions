@@ -725,6 +725,61 @@
         }
       }
     },
+    "/api/v1/setup": {
+      "post": {
+        "operationId": "runSetup",
+        "summary": "Run setup commands on backends",
+        "description": "Triggers execution of configured setup commands (e.g. `claude plugin install ...`) on the local backend and all sprites. Requires a dashboard session (admin only). Commands are idempotent via a content-addressed sentinel — pass `force: true` to bypass.",
+        "tags": ["Utility"],
+        "security": [{ "BearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "force": {
+                    "type": "boolean",
+                    "description": "Bypass the sentinel check and re-run all commands",
+                    "default": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Setup results per backend",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "commands": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "backend": { "type": "string" },
+                          "name": { "type": "string" },
+                          "status": { "type": "string" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": { "description": "Only dashboard users can run setup" }
+        }
+      }
+    },
     "/api/v1/files/upload": {
       "post": {
         "operationId": "uploadFile",
