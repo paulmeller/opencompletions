@@ -15,7 +15,14 @@
       "Bash(fuser -k 3456/tcp)",
       "Bash(git add:*)",
       "Bash(ls -la /Users/paulmeller/Projects/opencompletions/.env*)",
-      "Read(//Users/paulmeller/Projects/opencompletions-dashboard/**)"
+      "Read(//Users/paulmeller/Projects/opencompletions-dashboard/**)",
+      "Bash(npm install:*)",
+      "Bash(lsof -ti:3000)",
+      "Bash(fuser -k 3000/tcp)",
+      "Bash(kill -9 2821 2787 2774)",
+      "Bash(pkill -f 'next dev')",
+      "Bash(pkill -f next-server)",
+      "Bash(pkill -f \"npm run dev\")"
     ]
   }
 }

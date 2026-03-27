@@ -1,0 +1,32 @@
+Download the React DevTools for a better development experience: https://react.dev/link/react-devtools
+web-socket.ts:50 WebSocket connection to 'wss://0d29d7f7-b07b-421f-8519-b42a845529f7-00-35ycm7xzo1rlc.riker.replit.dev/_next/webpack-hmr?id=c5i1aSqE-zM03tYdMjDrG' failed: 
+init @ web-socket.ts:50
+createWebSocket @ web-socket.ts:145
+hydrate @ app-index.tsx:361
+(anonymous) @ app-next-turbopack.ts:14
+(anonymous) @ app-bootstrap.ts:79
+loadScriptsInSequence @ app-bootstrap.ts:23
+appBootstrap @ app-bootstrap.ts:61
+module evaluation @ app-next-turbopack.ts:11
+(anonymous) @ hmr-runtime.ts:650
+runModuleExecutionHooks @ dev-base.ts:213
+instantiateModuleShared @ hmr-runtime.ts:648
+instantiateModule @ dev-base.ts:181
+getOrInstantiateRuntimeModule @ dev-base.ts:101
+registerChunk @ runtime-backend-dom.ts:68Understand this error
+web-socket.ts:50 WebSocket connection to 'wss://0d29d7f7-b07b-421f-8519-b42a845529f7-00-35ycm7xzo1rlc.riker.replit.dev/_next/webpack-hmr?id=c5i1aSqE-zM03tYdMjDrG' failed: 
+init @ web-socket.ts:50Understand this error
+web-socket.ts:50 WebSocket connection to 'wss://0d29d7f7-b07b-421f-8519-b42a845529f7-00-35ycm7xzo1rlc.riker.replit.dev/_next/webpack-hmr?id=c5i1aSqE-zM03tYdMjDrG' failed: 
+init @ web-socket.ts:50Understand this error
+web-socket.ts:50 WebSocket connection to 'wss://0d29d7f7-b07b-421f-8519-b42a845529f7-00-35ycm7xzo1rlc.riker.replit.dev/_next/webpack-hmr?id=c5i1aSqE-zM03tYdMjDrG' failed: 
+init @ web-socket.ts:50Understand this error
+web-socket.ts:50 WebSocket connection to 'wss://0d29d7f7-b07b-421f-8519-b42a845529f7-00-35ycm7xzo1rlc.riker.replit.dev/_next/webpack-hmr?id=c5i1aSqE-zM03tYdMjDrG' failed: 
+init @ web-socket.ts:50Understand this error
+web-socket.ts:50 WebSocket connection to 'wss://0d29d7f7-b07b-421f-8519-b42a845529f7-00-35ycm7xzo1rlc.riker.replit.dev/_next/webpack-hmr?id=c5i1aSqE-zM03tYdMjDrG' failed: 
+init @ web-socket.ts:50Understand this error
+web-socket.ts:50 WebSocket connection to 'wss://0d29d7f7-b07b-421f-8519-b42a845529f7-00-35ycm7xzo1rlc.riker.replit.dev/_next/webpack-hmr?id=c5i1aSqE-zM03tYdMjDrG' failed: 
+init @ web-socket.ts:50Understand this error
+web-socket.ts:50 WebSocket connection to 'wss://0d29d7f7-b07b-421f-8519-b42a845529f7-00-35ycm7xzo1rlc.riker.replit.dev/_next/webpack-hmr?id=c5i1aSqE-zM03tYdMjDrG' failed: 
+init @ web-socket.ts:50Understand this error
+web-socket.ts:50 WebSocket connection to 'wss://0d29d7f7-b07b-421f-8519-b42a845529f7-00-35ycm7xzo1rlc.riker.replit.dev/_next/webpack-hmr?id=c5i1aSqE-zM03tYdMjDrG' failed: 
+init @ web-socket.ts:50Understand this error
