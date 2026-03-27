@@ -155,9 +155,43 @@ export default function PlaygroundPage() {
     }
   }, [running]);
 
+  // Ensure an API key exists, creating one if needed
+  const ensureApiKey = useCallback(async (): Promise<boolean> => {
+    if (hasApiKey) return true;
+    try {
+      const res = await fetch("/api/keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Default" }),
+      });
+      if (!res.ok) return false;
+      const key = await res.json();
+      if (key.value) {
+        // Save as active API key
+        await fetch("/api/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ active_api_key: key.value }),
+        });
+        setHasApiKey(true);
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }, [hasApiKey]);
+
   // Send
   const handleSend = useCallback(async () => {
     if (!prompt.trim() || running) return;
+
+    // Auto-create API key if none exists
+    const keyReady = await ensureApiKey();
+    if (!keyReady) {
+      setError("Failed to create API key. Check WorkOS configuration.");
+      return;
+    }
 
     const h = [prompt.trim(), ...history.filter((x) => x !== prompt.trim())].slice(0, 5);
     setHistory(h);
