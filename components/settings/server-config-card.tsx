@@ -8,7 +8,6 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Field, FieldLabel, FieldDescription } from "@/components/ui/field";
 import { Save, Play } from "lucide-react";
-import { useApiKey } from "@/lib/api-key-context";
 
 interface SettingRow {
   key: string;
@@ -153,7 +152,6 @@ export function ServerConfigCard() {
 }
 
 function RunSetupButton() {
-  const userKey = useApiKey();
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<string | null>(null);
 
@@ -161,9 +159,13 @@ function RunSetupButton() {
     setRunning(true);
     setResult(null);
     try {
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (userKey) headers["Authorization"] = `Bearer ${userKey}`;
-      const res = await fetch("/api/v1/setup", { method: "POST", headers, body: JSON.stringify({ force: true }) });
+      // Don't send Bearer token — let browser send WorkOS session cookie
+      // (the setup endpoint requires a dashboard session, not just an API key)
+      const res = await fetch("/api/v1/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force: true }),
+      });
       const data = await res.json();
       if (!res.ok) {
         setResult(`Error: ${data.error?.message || res.status}`);

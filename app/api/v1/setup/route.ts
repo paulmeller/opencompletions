@@ -1,22 +1,17 @@
 export const runtime = "nodejs";
 
 import { ensureInitialized } from "@/lib/oc/init";
-import { authorize } from "@/lib/oc/authenticate";
 import { getConfig } from "@/lib/oc/config";
 import { getState } from "@/lib/oc/state";
 import { runLocalSetup, runSpriteSetup } from "@/lib/oc/setup";
+import { withAuth } from "@workos-inc/authkit-nextjs";
 
 export async function POST(request: Request) {
   await ensureInitialized();
 
-  const auth = await authorize(request);
-  if (!auth.ok) return auth.response;
-
-  // Admin permission gate: require a WorkOS dashboard session.
-  // Placeholder until proper roles system exists — for now, only
-  // browser-authenticated dashboard users may trigger setup commands.
+  // Admin-only: require a WorkOS dashboard session (not just an API key).
+  // The browser sends session cookies automatically.
   try {
-    const { withAuth } = await import("@workos-inc/authkit-nextjs");
     const { user } = await withAuth();
     if (!user) {
       return Response.json(
