@@ -3,9 +3,12 @@ export { handleOptions as OPTIONS } from "@/lib/oc/cors";
 
 import { ensureInitialized } from "@/lib/oc/init";
 import { authorize } from "@/lib/oc/authenticate";
-import { enqueue } from "@/lib/oc/queue";
-import { buildOpenAIResponse } from "@/lib/oc/response-builders";
-import { handleOpenAICompletionsStream } from "@/lib/oc/streaming";
+import { getConfig } from "@/lib/oc/config";
+import { handleAgentStream, handleAgentBuffered } from "@/lib/oc/streaming";
+import { normalizeResponseFormat } from "@/lib/oc/helpers";
+import { resolveSkills } from "@/lib/oc/skill-loader";
+import type { SkillFilter, PreloadSkill } from "@/lib/oc/skill-loader";
+import type { AgentOpts } from "@/lib/oc/types";
 
 export async function POST(request: Request) {
   await ensureInitialized();
@@ -33,28 +36,31 @@ export async function POST(request: Request) {
     );
   }
 
-  let p = typeof rawPrompt === "string" ? rawPrompt : (rawPrompt as string[]).join("\n");
+  let prompt = typeof rawPrompt === "string" ? rawPrompt : (rawPrompt as string[]).join("\n");
 
-  // FIM (fill-in-the-middle): wrap prefix + suffix for infill
+  // FIM (fill-in-the-middle)
   if (body.suffix) {
-    p = `Complete the code that goes between <prefix> and <suffix>. Return ONLY the infill code, nothing else.\n\n<prefix>\n${p}\n</prefix>\n\n<suffix>\n${body.suffix}\n</suffix>`;
+    prompt = `Complete the code that goes between <prefix> and <suffix>. Return ONLY the infill code, nothing else.\n\n<prefix>\n${prompt}\n</prefix>\n\n<suffix>\n${body.suffix}\n</suffix>`;
   }
 
-  if (body.stream) {
-    return handleOpenAICompletionsStream(
-      p,
-      (body.model as string) || null,
-      forwardToken,
-    );
-  }
+  const config = getConfig();
+  const skillFilter = body.skill_filter as SkillFilter | undefined;
+  const preloadSkills = body.preload_skills as PreloadSkill[] | undefined;
+  const { systemPromptPrefix, mcpServers } = resolveSkills(request, skillFilter, preloadSkills);
 
-  try {
-    const text = await enqueue(p, undefined, { token: forwardToken });
-    return Response.json(buildOpenAIResponse(text, body.model as string, false));
-  } catch (err) {
-    return Response.json(
-      { error: { message: (err as Error).message, type: "server_error", code: 500 } },
-      { status: 500 },
-    );
+  const agentOpts: AgentOpts = {
+    prompt,
+    systemPrompt: systemPromptPrefix || undefined,
+    maxTurns: (body.max_turns as number) || config.agentMaxTurns,
+    model: (body.model as string) || undefined,
+    clientToken: forwardToken || undefined,
+    backend: config.backend,
+    responseFormat: normalizeResponseFormat(body.response_format as string | { type: string } | undefined),
+    mcpServers: mcpServers || undefined,
+  };
+
+  if (body.stream !== false) {
+    return handleAgentStream(prompt, agentOpts);
   }
+  return handleAgentBuffered(prompt, agentOpts);
 }

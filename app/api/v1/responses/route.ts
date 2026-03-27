@@ -3,12 +3,13 @@ export { handleOptions as OPTIONS } from "@/lib/oc/cors";
 
 import { ensureInitialized } from "@/lib/oc/init";
 import { authorize } from "@/lib/oc/authenticate";
-import { enqueue } from "@/lib/oc/queue";
-import {
-  extractResponsesPrompt,
-  buildResponsesResponse,
-} from "@/lib/oc/response-builders";
-import { handleResponsesStream } from "@/lib/oc/streaming";
+import { getConfig } from "@/lib/oc/config";
+import { extractResponsesPrompt } from "@/lib/oc/response-builders";
+import { handleAgentStream, handleAgentBuffered } from "@/lib/oc/streaming";
+import { normalizeResponseFormat } from "@/lib/oc/helpers";
+import { resolveSkills } from "@/lib/oc/skill-loader";
+import type { SkillFilter, PreloadSkill } from "@/lib/oc/skill-loader";
+import type { AgentOpts } from "@/lib/oc/types";
 
 export async function POST(request: Request) {
   await ensureInitialized();
@@ -29,7 +30,6 @@ export async function POST(request: Request) {
   }
 
   const { prompt, systemPrompt } = extractResponsesPrompt(body as Parameters<typeof extractResponsesPrompt>[0]);
-
   if (!prompt) {
     return Response.json(
       { error: { message: "input is required", type: "invalid_request_error", code: 400 } },
@@ -37,22 +37,31 @@ export async function POST(request: Request) {
     );
   }
 
-  if (body.stream) {
-    return handleResponsesStream(
-      prompt,
-      systemPrompt,
-      (body.model as string) || null,
-      forwardToken,
-    );
+  const config = getConfig();
+  const skillFilter = body.skill_filter as SkillFilter | undefined;
+  const preloadSkills = body.preload_skills as PreloadSkill[] | undefined;
+  const { systemPromptPrefix, mcpServers } = resolveSkills(request, skillFilter, preloadSkills);
+
+  let finalSystemPrompt = systemPrompt || undefined;
+  if (systemPromptPrefix) {
+    finalSystemPrompt = finalSystemPrompt
+      ? `${systemPromptPrefix}\n\n${finalSystemPrompt}`
+      : systemPromptPrefix;
   }
 
-  try {
-    const text = await enqueue(prompt, systemPrompt ?? undefined, { token: forwardToken });
-    return Response.json(buildResponsesResponse(text, body.model as string));
-  } catch (err) {
-    return Response.json(
-      { error: { message: (err as Error).message, type: "server_error", code: 500 } },
-      { status: 500 },
-    );
+  const agentOpts: AgentOpts = {
+    prompt,
+    systemPrompt: finalSystemPrompt,
+    maxTurns: (body.max_turns as number) || config.agentMaxTurns,
+    model: (body.model as string) || undefined,
+    clientToken: forwardToken || undefined,
+    backend: config.backend,
+    responseFormat: normalizeResponseFormat(body.response_format as string | { type: string } | undefined),
+    mcpServers: mcpServers || undefined,
+  };
+
+  if (body.stream !== false) {
+    return handleAgentStream(prompt, agentOpts);
   }
+  return handleAgentBuffered(prompt, agentOpts);
 }
