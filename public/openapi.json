@@ -122,7 +122,8 @@
     "/api/v1/chat/completions": {
       "post": {
         "operationId": "createChatCompletion",
-        "summary": "Create a chat completion (OpenAI-compatible)",
+        "summary": "Create a chat completion (OpenAI-compatible, agent-powered)",
+        "description": "Routes through the agent pipeline with full MCP tool use and skill support. Returns OpenAI-compatible response format. Supports `skill_filter` and `preload_skills` fields in addition to standard OpenAI parameters.",
         "tags": ["OpenAI-Compatible"],
         "security": [{ "BearerAuth": [] }, { "ProviderKey": [] }],
         "requestBody": {
@@ -177,7 +178,8 @@
     "/api/v1/completions": {
       "post": {
         "operationId": "createCompletion",
-        "summary": "Create a text completion (OpenAI-compatible)",
+        "summary": "Create a text completion (OpenAI-compatible, agent-powered)",
+        "description": "Routes through the agent pipeline with full MCP tool use and skill support. Returns OpenAI-compatible text completion format. Supports `skill_filter` and `preload_skills`.",
         "tags": ["OpenAI-Compatible"],
         "security": [{ "BearerAuth": [] }, { "ProviderKey": [] }],
         "requestBody": {
@@ -232,7 +234,8 @@
     "/api/v1/messages": {
       "post": {
         "operationId": "createMessage",
-        "summary": "Create a message (Anthropic-compatible)",
+        "summary": "Create a message (Anthropic-compatible, agent-powered)",
+        "description": "Routes through the agent pipeline with full MCP tool use and skill support. Returns Anthropic-compatible message format. Supports `skill_filter` and `preload_skills`.",
         "tags": ["Anthropic-Compatible"],
         "security": [{ "BearerAuth": [] }, { "ProviderKey": [] }],
         "requestBody": {
@@ -386,7 +389,8 @@
     "/api/v1/responses": {
       "post": {
         "operationId": "createResponse",
-        "summary": "Create a response (OpenAI Responses API)",
+        "summary": "Create a response (OpenAI Responses API, agent-powered)",
+        "description": "Routes through the agent pipeline with full MCP tool use and skill support. Returns OpenAI Responses API format. Supports `skill_filter` and `preload_skills`.",
         "description": "OpenAI's new unified API format. Accepts `input` (string or message array) and optional `instructions` (system prompt). Supports streaming.",
         "tags": ["OpenAI-Compatible"],
         "security": [{ "BearerAuth": [] }, { "ProviderKey": [] }],
@@ -1228,6 +1232,30 @@
             "type": "boolean",
             "default": false,
             "description": "If true, returns SSE stream of chunks"
+          },
+          "skill_filter": {
+            "type": "object",
+            "properties": {
+              "names": { "type": "array", "items": { "type": "string" }, "description": "Whitelist skills by name" },
+              "tags": { "type": "array", "items": { "type": "string" }, "description": "Whitelist skills by tag" }
+            },
+            "description": "Filter which skills the MCP server exposes"
+          },
+          "preload_skills": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string", "description": "Load a DB skill by name into the system prompt" },
+                "instructions": { "type": "string", "description": "Inline skill instructions" },
+                "resources": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Inline resource files" }
+              }
+            },
+            "description": "Inject skill content directly into the system prompt (no MCP round-trip)"
+          },
+          "max_turns": {
+            "type": "integer",
+            "description": "Maximum agent turns (default from server config)"
           }
         },
         "required": ["messages"]

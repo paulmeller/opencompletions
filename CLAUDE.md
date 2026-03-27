@@ -41,12 +41,14 @@ Single Next.js app with:
 
 All completion endpoints route through the **agent pipeline** with full MCP tool use and skill support.
 
-**Completion endpoints** (all POST, all support `skill_filter` + `preload_skills`):
-- `/api/v1/chat/completions` — OpenAI chat format
-- `/api/v1/completions` — OpenAI legacy format
-- `/api/v1/messages` — Anthropic messages format
-- `/api/v1/responses` — OpenAI responses format
-- `/api/v1/agent` — Multi-turn agent (SSE streaming, workspace, run logging)
+**Completion endpoints** (all POST, all route through agent pipeline, all support `skill_filter` + `preload_skills`):
+- `/api/v1/chat/completions` — OpenAI chat format (streams `delta.content` chunks, returns `ChatCompletionResponse`)
+- `/api/v1/completions` — OpenAI legacy format (streams `choices[].text` chunks, returns `CompletionResponse`)
+- `/api/v1/messages` — Anthropic messages format (streams `content_block_delta` events, returns Anthropic `Message`)
+- `/api/v1/responses` — OpenAI responses format (streams `output_text.delta` events, returns `Response`)
+- `/api/v1/agent` — Native agent format (streams raw agent events: `system`, `assistant`, `tool_use`, `result`)
+
+All endpoints use `enqueueAgent()` internally with MCP tool use. The first four translate agent events into SDK-compatible response formats. The agent endpoint returns raw events for full control.
 
 **Management endpoints**:
 - `POST /api/v1/setup` — Run setup commands on backends (admin-only)
