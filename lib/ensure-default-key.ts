@@ -1,7 +1,7 @@
 import { getSetting, setSetting } from "@/lib/db";
 
 const WORKOS_API_KEY = process.env.WORKOS_API_KEY || "";
-const ORG_ID = process.env.WORKOS_ORG_ID || "org_01KA6B78CC8NMS5GK1VK5FYAP1";
+const ORG_ID = process.env.WORKOS_ORG_ID || "";
 const SEED_CONFIG = process.env.SEED_CONFIG || "";
 
 /**
@@ -52,7 +52,7 @@ export async function ensureDefaultKey(): Promise<void> {
   seedSettings();
 
   if (getSetting("active_api_key")) return;
-  if (!WORKOS_API_KEY) return;
+  if (!WORKOS_API_KEY || !ORG_ID) return;
 
   try {
     const res = await fetch(
