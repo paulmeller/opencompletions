@@ -23,10 +23,7 @@ export async function authorize(
   const session = await requireAuth(request);
   if (session.ok) return { ok: true, authContext: null };
 
-  // If no API key is configured, allow unauthenticated access
-  const config = getConfig();
-  if (!config.apiKey) return { ok: true, authContext: null };
-
+  // Both failed — unauthorized
   return {
     ok: false,
     response: Response.json(
