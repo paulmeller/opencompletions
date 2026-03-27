@@ -45,6 +45,7 @@ All under `/api/v1/`:
 - `POST /api/v1/completions` — OpenAI legacy
 - `POST /api/v1/messages` — Anthropic messages
 - `POST /api/v1/agent` — Multi-turn agent (SSE streaming)
+- `POST /api/v1/setup` — Run setup commands on backends (admin-only, requires dashboard session)
 - `GET /api/v1/models` — Model list
 - `GET /api/v1/backends` — Available backends
 - `GET /api/v1/runs` — Agent run history
@@ -57,6 +58,24 @@ All under `/api/v1/`:
 - **External API**: WorkOS API keys (created on Keys page, sent as Bearer token)
 - **Internal MCP**: SESSION_SECRET as Bearer token (injected by agent route)
 - Every user gets a Default API key auto-created on first login
+
+## Setup Commands
+
+One-time shell commands that run on each backend instance at startup (e.g. installing Claude Code plugins). Configured via:
+
+- **Dashboard**: Settings → "Setup Commands" textarea (one command per line)
+- **Database**: `setup_commands` key in settings table (newline or comma-separated)
+- **Environment**: `SETUP_COMMANDS` env var
+
+Commands are idempotent via a content-addressed sentinel hash (`~/.opencompletions/.setup-done` on local, `/root/.oc-setup-done` on sprites). They only re-run when the command list changes. Use `POST /api/v1/setup` with `{"force": true}` or the dashboard "Run Setup Now" button to bypass the sentinel.
+
+Example for document-skills plugin (two commands, marketplace must be added first):
+```
+claude plugin marketplace add anthropics/skills
+claude plugin install document-skills@anthropic-agent-skills
+```
+
+Implementation: `lib/oc/setup.ts` (runLocalSetup, runSpriteSetup), called from `lib/oc/init.ts` during startup.
 
 ## Database
 
