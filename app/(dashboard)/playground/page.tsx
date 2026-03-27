@@ -186,11 +186,11 @@ export default function PlaygroundPage() {
     if (cliProvider !== "claude") body.cli = cliProvider;
     if (systemPrompt.trim()) body.system_prompt = systemPrompt.trim();
     const apiKey = apiKeyRef.current?.value;
-    if (apiKey) body.apiKey = apiKey;
 
     try {
       const fetchHeaders: Record<string, string> = { "Content-Type": "application/json" };
       if (userKey) fetchHeaders["Authorization"] = `Bearer ${userKey}`;
+      if (apiKey) fetchHeaders["x-api-key"] = apiKey;
       const response = await fetch("/api/v1/agent", {
         method: "POST",
         headers: fetchHeaders,

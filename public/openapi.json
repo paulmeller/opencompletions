@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "OpenCompletions API",
-    "description": "A lightweight server wrapping AI coding CLIs as a completions and agent API, with OpenAI-compatible, Anthropic-compatible, and multi-turn Agent endpoints. Supports multiple CLI backends (`--cli claude|opencode`), multiple execution backends (local, sprite, vercel).\n\n**Authentication**: When the server is started with `--api-key`, requests must include either a `Bearer` token or an `x-api-key` header matching the server key. The `x-api-key` header is also forwarded to the CLI backend as the provider auth token (e.g. Anthropic API key). If the server has a pre-configured provider key, per-request `x-api-key` is optional. Health check, status, docs, and spec endpoints require no authentication.",
+    "description": "A unified Next.js application that wraps AI coding CLIs as a completions and agent API, with OpenAI-compatible, Anthropic-compatible, and multi-turn Agent endpoints. Supports multiple execution backends (local, sprite, vercel) configured via the Settings page.\n\n**Authentication**: All API endpoints require a Bearer token. API keys are created and managed on the Keys page. Include the key as `Authorization: Bearer <key>` or as the `x-api-key` header. The `x-api-key` header is also forwarded to the CLI backend as the provider auth token. Health check and docs endpoints require no authentication.",
     "version": "1.0.0",
     "license": {
       "name": "MIT"
@@ -10,12 +10,16 @@
   },
   "servers": [
     {
+      "url": "/",
+      "description": "Current server (relative)"
+    },
+    {
       "url": "https://api.opencompletions.com",
       "description": "Production server"
     }
   ],
   "paths": {
-    "/": {
+    "/api/health": {
       "get": {
         "operationId": "healthCheck",
         "summary": "Health check and server info",
@@ -35,48 +39,7 @@
         }
       }
     },
-    "/openapi.json": {
-      "get": {
-        "operationId": "getOpenApiSpec",
-        "summary": "OpenAPI specification",
-        "tags": ["Utility"],
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "The OpenAPI JSON specification for this API",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/docs": {
-      "get": {
-        "operationId": "getDocs",
-        "summary": "Interactive API documentation",
-        "description": "Serves a Scalar API reference UI with a direct download link to the OpenAPI spec.",
-        "tags": ["Utility"],
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "HTML page with interactive API documentation",
-            "content": {
-              "text/html": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/models": {
+    "/api/v1/models": {
       "get": {
         "operationId": "listModels",
         "summary": "List available models",
@@ -106,7 +69,7 @@
         }
       }
     },
-    "/v1/models/{model_id}": {
+    "/api/v1/models/{model_id}": {
       "get": {
         "operationId": "getModel",
         "summary": "Get model details",
@@ -156,7 +119,7 @@
         }
       }
     },
-    "/v1/chat/completions": {
+    "/api/v1/chat/completions": {
       "post": {
         "operationId": "createChatCompletion",
         "summary": "Create a chat completion (OpenAI-compatible)",
@@ -211,7 +174,7 @@
         }
       }
     },
-    "/v1/completions": {
+    "/api/v1/completions": {
       "post": {
         "operationId": "createCompletion",
         "summary": "Create a text completion (OpenAI-compatible)",
@@ -266,7 +229,7 @@
         }
       }
     },
-    "/v1/messages": {
+    "/api/v1/messages": {
       "post": {
         "operationId": "createMessage",
         "summary": "Create a message (Anthropic-compatible)",
@@ -322,7 +285,7 @@
         }
       }
     },
-    "/v1/messages/count_tokens": {
+    "/api/v1/messages/count_tokens": {
       "post": {
         "operationId": "countTokens",
         "summary": "Estimate token count (Anthropic-compatible)",
@@ -369,7 +332,7 @@
         }
       }
     },
-    "/v1/embeddings": {
+    "/api/v1/embeddings": {
       "post": {
         "operationId": "createEmbedding",
         "summary": "Create embeddings (stub)",
@@ -420,7 +383,7 @@
         }
       }
     },
-    "/v1/responses": {
+    "/api/v1/responses": {
       "post": {
         "operationId": "createResponse",
         "summary": "Create a response (OpenAI Responses API)",
@@ -477,11 +440,11 @@
         }
       }
     },
-    "/v1/agent": {
+    "/api/v1/agent": {
       "post": {
         "operationId": "createAgentRun",
         "summary": "Run a multi-turn agent with tool use",
-        "description": "Starts an autonomous agent that can use tools (Read, Edit, Bash, etc.) across multiple turns. Streams Claude Code's NDJSON events as SSE by default. Supports session resumption, tool restrictions, MCP servers, and budget caps. Note: when the server is started with `--cli opencode`, the fields `allowed_tools`, `disallowed_tools`, `max_budget_usd`, and `mcp_servers` are not supported and will return 400 errors if provided.",
+        "description": "Starts an autonomous agent that can use tools (Read, Edit, Bash, etc.) across multiple turns. Streams Claude Code's NDJSON events as SSE by default. Supports session resumption, tool restrictions, MCP servers, and budget caps.",
         "tags": ["Agent"],
         "security": [{ "BearerAuth": [] }, { "ProviderKey": [] }],
         "requestBody": {
@@ -548,7 +511,201 @@
         }
       }
     },
-    "/v1/status": {
+    "/api/v1/backends": {
+      "get": {
+        "operationId": "listBackends",
+        "summary": "List available execution backends",
+        "description": "Returns the default backend and all available backends with their status and pool details.",
+        "tags": ["Utility"],
+        "security": [{ "BearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Backend availability and status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackendsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs": {
+      "get": {
+        "operationId": "listRuns",
+        "summary": "List agent runs",
+        "description": "Returns a paginated list of agent runs, optionally filtered by key ID, org ID, or status.",
+        "tags": ["Dashboard"],
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": { "type": "integer", "default": 50, "maximum": 200 },
+            "description": "Maximum number of runs to return"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": { "type": "integer", "default": 0 },
+            "description": "Number of runs to skip"
+          },
+          {
+            "name": "key_id",
+            "in": "query",
+            "schema": { "type": "string" },
+            "description": "Filter by API key ID"
+          },
+          {
+            "name": "org_id",
+            "in": "query",
+            "schema": { "type": "string" },
+            "description": "Filter by organization ID"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": { "type": "string" },
+            "description": "Filter by run status"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list of runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run_id}": {
+      "get": {
+        "operationId": "getRun",
+        "summary": "Get agent run details",
+        "tags": ["Dashboard"],
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "The run ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Run details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Run not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stats": {
+      "get": {
+        "operationId": "getStats",
+        "summary": "Get aggregate run statistics",
+        "description": "Returns aggregate statistics about agent runs, optionally filtered by key, org, or time range. Also includes current worker and queue status.",
+        "tags": ["Dashboard"],
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "key_id",
+            "in": "query",
+            "schema": { "type": "string" },
+            "description": "Filter by API key ID"
+          },
+          {
+            "name": "org_id",
+            "in": "query",
+            "schema": { "type": "string" },
+            "description": "Filter by organization ID"
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "schema": { "type": "integer" },
+            "description": "Unix timestamp (ms) — only count runs after this time"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Aggregate statistics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/status": {
       "get": {
         "operationId": "getStatus",
         "summary": "Queue and worker status",
@@ -567,6 +724,251 @@
           }
         }
       }
+    },
+    "/api/v1/files/upload": {
+      "post": {
+        "operationId": "uploadFile",
+        "summary": "Upload a file to a workspace",
+        "description": "Uploads a file to a workspace. The filename is specified via the `X-Filename` header. Optionally specify `X-Workspace-Id` to upload to an existing workspace, otherwise a new workspace is created.",
+        "tags": ["Files"],
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "X-Filename",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "The filename (URL-encoded if needed)"
+          },
+          {
+            "name": "X-Workspace-Id",
+            "in": "header",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Existing workspace ID to upload into"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "File uploaded successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "workspace_id": { "type": "string" },
+                    "filename": { "type": "string" },
+                    "size": { "type": "integer" }
+                  },
+                  "required": ["workspace_id", "filename", "size"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid filename",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/{workspace_id}": {
+      "get": {
+        "operationId": "listWorkspaceFiles",
+        "summary": "List files in a workspace",
+        "tags": ["Files"],
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of files in the workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "workspace_id": { "type": "string" },
+                    "files": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    }
+                  },
+                  "required": ["workspace_id", "files"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Workspace not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteWorkspace",
+        "summary": "Delete a workspace and all its files",
+        "tags": ["Files"],
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workspace deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Workspace not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/{workspace_id}/{filename}": {
+      "get": {
+        "operationId": "downloadFile",
+        "summary": "Download a file from a workspace",
+        "tags": ["Files"],
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "filename",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "The filename (may include path separators for nested files)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File contents",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid filename",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File or workspace not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -574,7 +976,7 @@
       "BearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Server API key configured via `--api-key` flag."
+        "description": "API key created on the Keys page. Include as `Authorization: Bearer <key>`."
       },
       "ProviderKey": {
         "type": "apiKey",
@@ -1133,33 +1535,11 @@
           "name": { "type": "string", "example": "opencompletions" },
           "status": { "type": "string", "enum": ["ok"] },
           "backend": { "type": "string", "enum": ["local", "sprite", "vercel"] },
-          "cli": { "type": "string", "enum": ["claude", "opencode"], "description": "The CLI backend in use, set via the --cli flag" },
+          "cli": { "type": "string", "enum": ["claude", "opencode"], "description": "The CLI backend in use" },
           "active_workers": { "type": "integer" },
           "queued": { "type": "integer" },
           "max_concurrency": { "type": "integer" },
-          "endpoints": { "type": "object" },
-          "sprites": {
-            "type": "array",
-            "description": "Present when backend is `sprite`",
-            "items": {
-              "type": "object",
-              "properties": {
-                "name": { "type": "string" },
-                "active_jobs": { "type": "integer" }
-              }
-            }
-          },
-          "sandboxes": {
-            "type": "array",
-            "description": "Present when backend is `vercel`",
-            "items": {
-              "type": "object",
-              "properties": {
-                "id": { "type": "string" },
-                "active_jobs": { "type": "integer" }
-              }
-            }
-          }
+          "endpoints": { "type": "object" }
         },
         "required": ["name", "status", "backend"]
       },
@@ -1169,29 +1549,79 @@
           "active_workers": { "type": "integer" },
           "queued": { "type": "integer" },
           "max_concurrency": { "type": "integer" },
-          "backend": { "type": "string" },
-          "sprites": {
+          "backend": { "type": "string" }
+        },
+        "required": ["active_workers", "queued", "max_concurrency", "backend"]
+      },
+      "BackendsResponse": {
+        "type": "object",
+        "properties": {
+          "default": { "type": "string", "description": "The default backend", "example": "local" },
+          "available": {
             "type": "array",
-            "description": "Present when backend is `sprite`",
-            "items": {
-              "type": "object",
-              "properties": {
-                "name": { "type": "string" },
-                "active_jobs": { "type": "integer" }
-              }
-            }
+            "items": { "type": "string", "enum": ["local", "sprite", "vercel"] },
+            "description": "List of available backend names"
           },
-          "sandboxes": {
-            "type": "array",
-            "description": "Present when backend is `vercel`",
-            "items": {
+          "details": {
+            "type": "object",
+            "description": "Per-backend status and pool details",
+            "additionalProperties": {
               "type": "object",
               "properties": {
-                "id": { "type": "string" },
-                "active_jobs": { "type": "integer" }
+                "status": { "type": "string", "example": "ready" },
+                "pool_size": { "type": "integer" },
+                "busy": { "type": "integer" }
               }
             }
           }
+        },
+        "required": ["default", "available", "details"]
+      },
+      "Run": {
+        "type": "object",
+        "description": "An agent run record",
+        "properties": {
+          "id": { "type": "string" },
+          "status": { "type": "string" },
+          "endpoint": { "type": "string" },
+          "model": { "type": "string" },
+          "backend": { "type": "string" },
+          "api_key_id": { "type": ["string", "null"] },
+          "org_id": { "type": ["string", "null"] },
+          "num_turns": { "type": "integer" },
+          "total_cost_usd": { "type": "number" },
+          "duration_ms": { "type": "integer" },
+          "created_at": { "type": "string", "format": "date-time" },
+          "finished_at": { "type": ["string", "null"], "format": "date-time" }
+        },
+        "required": ["id", "status"]
+      },
+      "RunListResponse": {
+        "type": "object",
+        "properties": {
+          "runs": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Run" }
+          },
+          "total": { "type": "integer" },
+          "limit": { "type": "integer" },
+          "offset": { "type": "integer" }
+        },
+        "required": ["runs", "total", "limit", "offset"]
+      },
+      "StatsResponse": {
+        "type": "object",
+        "description": "Aggregate run statistics plus current server status",
+        "properties": {
+          "total_runs": { "type": "integer" },
+          "total_cost_usd": { "type": "number" },
+          "avg_duration_ms": { "type": "number" },
+          "by_status": { "type": "object", "additionalProperties": { "type": "integer" } },
+          "by_endpoint": { "type": "object", "additionalProperties": { "type": "integer" } },
+          "active_workers": { "type": "integer" },
+          "queued": { "type": "integer" },
+          "max_concurrency": { "type": "integer" },
+          "backend": { "type": "string" }
         },
         "required": ["active_workers", "queued", "max_concurrency", "backend"]
       },
@@ -1345,8 +1775,16 @@
       "description": "Multi-turn autonomous agent API with tool use and MCP support"
     },
     {
+      "name": "Files",
+      "description": "Workspace file management — upload, list, download, and delete"
+    },
+    {
+      "name": "Dashboard",
+      "description": "Agent run history, statistics, and monitoring"
+    },
+    {
       "name": "Utility",
-      "description": "Health check and status endpoints"
+      "description": "Health check, status, and backend information"
     }
   ]
 }

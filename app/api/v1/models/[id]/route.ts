@@ -1,4 +1,5 @@
 export const runtime = "nodejs";
+export { handleOptions as OPTIONS } from "@/lib/oc/cors";
 
 import { ensureInitialized } from "@/lib/oc/init";
 import { buildModelObject } from "@/lib/oc/response-builders";

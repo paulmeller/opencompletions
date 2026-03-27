@@ -29,8 +29,6 @@ export function LlmKeysCard() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
-  const hasEnvFallback = !!process.env.NEXT_PUBLIC_HAS_LLM_KEY;
-
   useEffect(() => {
     fetch("/api/settings")
       .then((r) => r.json())

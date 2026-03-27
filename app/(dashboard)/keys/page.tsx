@@ -70,14 +70,6 @@ export default function KeysPage() {
       const key = await res.json();
       setCreatedKey(key);
       setNewKeyName("");
-      // Auto-save as active API key for playground
-      if (key.value) {
-        await fetch("/api/settings", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ active_api_key: key.value }),
-        }).catch(() => {});
-      }
       fetchKeys();
     } catch (err) {
       setError((err as Error).message);
@@ -188,7 +180,14 @@ export default function KeysPage() {
                 {keys.map((key) => (
                   <TableRow key={key.id}>
                     <TableCell className="font-medium">{key.name}</TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">{key.obfuscated_value}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1">
+                        <span className="font-mono text-xs text-muted-foreground">{key.obfuscated_value}</span>
+                        <Button variant="ghost" size="sm" onClick={() => copyToClipboard(key.obfuscated_value)} title="Copy key ID">
+                          <Copy />
+                        </Button>
+                      </div>
+                    </TableCell>
                     <TableCell className="hidden md:table-cell">
                       {key.permissions.length === 0 ? (
                         <span className="text-xs text-muted-foreground">All</span>

@@ -188,9 +188,8 @@ export async function POST(request: Request) {
     const proto = request.headers.get("x-forwarded-proto") || "http";
     const dashboardUrl = process.env.MCP_BASE_URL || `${proto}://${host}`;
 
-    // Use the active API key for MCP auth (same server, same DB)
-    // Use SESSION_SECRET as internal token — the MCP route accepts it via requireAuth/CONFIG_TOKEN
-    const mcpAuthToken = process.env.SESSION_SECRET || process.env.CONFIG_TOKEN || "";
+    // Use SESSION_SECRET as internal token for MCP auth
+    const mcpAuthToken = process.env.SESSION_SECRET || "";
     agentOpts.mcpServers = {
       skills: {
         type: "http",
