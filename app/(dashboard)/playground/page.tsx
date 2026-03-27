@@ -40,6 +40,7 @@ const MODEL_OPTIONS: Record<string, { value: string; label: string }[]> = {
   ],
 };
 import { cn } from "@/lib/utils";
+import { useApiKey } from "@/lib/api-key-context";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -81,6 +82,7 @@ interface ConversationItem {
 // ---------------------------------------------------------------------------
 
 export default function PlaygroundPage() {
+  const userKey = useApiKey();
   const [prompt, setPrompt] = useState("");
   const [systemPrompt, setSystemPrompt] = useState(
     "You have MCP skill tools available (list_skills, activate_skill, read_resource). " +
@@ -110,7 +112,9 @@ export default function PlaygroundPage() {
 
   // Load backends, history, and check for API key on mount
   useEffect(() => {
-    fetch("/api/v1/backends").then((r) => r.json()).then((d) => {
+    const headers: Record<string, string> = {};
+    if (userKey) headers["Authorization"] = `Bearer ${userKey}`;
+    fetch("/api/v1/backends", { headers }).then((r) => r.json()).then((d) => {
       if (d.available?.length) {
         setBackends(d.available);
         setSelectedBackend(d.default || d.available[0]);
@@ -120,7 +124,7 @@ export default function PlaygroundPage() {
       const h = JSON.parse(localStorage.getItem("oc-playground-history") || "[]");
       setHistory(h);
     } catch {}
-  }, []);
+  }, [userKey]);
 
   // Autoscroll
   const scrollToBottom = useCallback(() => {
@@ -185,9 +189,11 @@ export default function PlaygroundPage() {
     if (apiKey) body.apiKey = apiKey;
 
     try {
+      const fetchHeaders: Record<string, string> = { "Content-Type": "application/json" };
+      if (userKey) fetchHeaders["Authorization"] = `Bearer ${userKey}`;
       const response = await fetch("/api/v1/agent", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: fetchHeaders,
         body: JSON.stringify(body),
         signal: controller.signal,
       });
@@ -243,7 +249,7 @@ export default function PlaygroundPage() {
       clearTimeout(timeout);
       abortRef.current = null;
     }
-  }, [prompt, systemPrompt, maxTurns, selectedBackend, responseFormat, cliProvider, model, sessionId, running, history]);
+  }, [prompt, systemPrompt, maxTurns, selectedBackend, responseFormat, cliProvider, model, sessionId, running, history, userKey]);
 
   const handleStop = () => abortRef.current?.abort();
 
@@ -260,6 +266,16 @@ export default function PlaygroundPage() {
 
   const items = buildConversation(events);
   const hasContent = items.length > 0 || running;
+
+  if (!userKey) {
+    return (
+      <div className="flex flex-col items-center justify-center h-[calc(100vh-4rem)] gap-4">
+        <p className="text-muted-foreground text-sm">
+          No API key available. Please sign in to provision an API key.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)]">

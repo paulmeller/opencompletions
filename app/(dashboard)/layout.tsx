@@ -4,7 +4,8 @@ import { Separator } from "@/components/ui/separator";
 import { AppSidebar } from "@/components/app-sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { DashboardBreadcrumb } from "@/components/dashboard-breadcrumb";
-import { ensureDefaultKey } from "@/lib/ensure-default-key";
+import { ensureUserKey, seedSettings } from "@/lib/ensure-user-key";
+import { ApiKeyProvider } from "@/lib/api-key-context";
 
 async function handleSignOut() {
   "use server";
@@ -13,7 +14,12 @@ async function handleSignOut() {
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { user } = await withAuth();
-  await ensureDefaultKey();
+
+  // Seed DB settings from SEED_CONFIG env var if present
+  seedSettings();
+
+  // Provision or retrieve the user's default API key
+  const userKey = user ? await ensureUserKey(user.id) : null;
 
   const sidebarUser = user
     ? {
@@ -35,7 +41,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
             </div>
           </header>
           <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
-            {children}
+            <ApiKeyProvider value={userKey}>
+              {children}
+            </ApiKeyProvider>
           </div>
         </SidebarInset>
       </SidebarProvider>

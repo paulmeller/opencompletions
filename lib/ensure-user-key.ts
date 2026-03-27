@@ -1,9 +1,7 @@
-import { getSetting, setSetting } from "@/lib/db";
+import { getUserDefaultKey, setUserDefaultKey, getSetting, setSetting } from "@/lib/db";
 
 const WORKOS_API_KEY = process.env.WORKOS_API_KEY || "";
 const SEED_CONFIG = process.env.SEED_CONFIG || "";
-
-const globalForSeed = globalThis as typeof globalThis & { __ocSeeded?: boolean };
 
 /**
  * Seed the DB from SEED_CONFIG env var if settings are empty.
@@ -43,38 +41,23 @@ export function seedSettings(): void {
 }
 
 /**
- * Ensure the user has an active API key. Runs once per process.
- * If no key in DB, checks WorkOS for existing keys before creating one.
+ * Ensure the given user has a default API key.
+ * If one exists in the DB, return it. Otherwise create one via WorkOS and store it.
+ * Returns the key value, or null if provisioning is not possible.
  */
-export async function ensureDefaultKey(): Promise<void> {
-  // Only run once per process lifetime
-  if (globalForSeed.__ocSeeded) return;
-  globalForSeed.__ocSeeded = true;
+export async function ensureUserKey(userId: string): Promise<string | null> {
+  // 1. Check DB for existing key
+  const existing = getUserDefaultKey(userId);
+  if (existing) return existing;
 
-  seedSettings();
-
-  if (getSetting("active_api_key")) return;
-  if (!WORKOS_API_KEY) return;
+  if (!WORKOS_API_KEY) return null;
 
   try {
-    const orgId = process.env.WORKOS_ORG_ID || await discoverOrgId();
-    if (!orgId) return;
+    // 2. Discover org ID
+    const orgId = process.env.WORKOS_ORG_ID || (await discoverOrgId());
+    if (!orgId) return null;
 
-    // Check if there are existing keys — reuse the first one if so
-    // (we can't retrieve the value, but we know keys exist so skip creating)
-    const listRes = await fetch(
-      `https://api.workos.com/organizations/${orgId}/api_keys`,
-      { headers: { Authorization: `Bearer ${WORKOS_API_KEY}` } },
-    );
-    if (listRes.ok) {
-      const listData = await listRes.json();
-      const existingKeys = listData.data || [];
-      if (existingKeys.length > 0) {
-        console.log(`[seed] ${existingKeys.length} WorkOS key(s) exist but active_api_key not in DB. Creating a new one to store.`);
-      }
-    }
-
-    // Create a new key (we need the value, which is only returned on creation)
+    // 3. Create key via WorkOS API
     const res = await fetch(
       `https://api.workos.com/organizations/${orgId}/api_keys`,
       {
@@ -84,18 +67,23 @@ export async function ensureDefaultKey(): Promise<void> {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ name: "Default" }),
-      }
+      },
     );
 
-    if (!res.ok) return;
+    if (!res.ok) return null;
 
     const data = await res.json();
-    const key = data.value;
-    if (key) {
-      setSetting("active_api_key", key, "secret");
-      console.log("[seed] Default API key created and saved");
-    }
-  } catch {}
+    const keyValue = data.value;
+    const keyId = data.id;
+    if (!keyValue) return null;
+
+    // 4. Store encrypted in DB
+    setUserDefaultKey(userId, keyId, keyValue);
+    console.log(`[seed] Default API key created for user ${userId}`);
+    return keyValue;
+  } catch {
+    return null;
+  }
 }
 
 async function discoverOrgId(): Promise<string | null> {

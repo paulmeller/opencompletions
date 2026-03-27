@@ -132,6 +132,25 @@ function migrate(db: Database.Database) {
       PRAGMA user_version = 4;
     `);
   }
+
+  if (version < 5) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS user_keys (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workos_user_id TEXT NOT NULL,
+        workos_key_id TEXT NOT NULL,
+        key_value TEXT NOT NULL,
+        name TEXT NOT NULL DEFAULT 'Default',
+        is_default INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_user_keys_user_default
+        ON user_keys(workos_user_id) WHERE is_default = 1;
+      CREATE INDEX IF NOT EXISTS idx_user_keys_user
+        ON user_keys(workos_user_id);
+      PRAGMA user_version = 5;
+    `);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -524,4 +543,40 @@ export function getRunStats(opts: {
       AVG(num_turns) as avg_turns
     FROM agent_runs WHERE ${where}
   `).get(...params) as Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// User Keys CRUD
+// ---------------------------------------------------------------------------
+
+export function getUserDefaultKey(workosUserId: string): string | null {
+  const db = getDb();
+  const row = db
+    .prepare("SELECT key_value FROM user_keys WHERE workos_user_id = ? AND is_default = 1")
+    .get(workosUserId) as { key_value: string } | undefined;
+  if (!row) return null;
+  return decrypt(row.key_value);
+}
+
+export function setUserDefaultKey(
+  workosUserId: string,
+  workosKeyId: string,
+  keyValue: string,
+): void {
+  const db = getDb();
+  const encrypted = encrypt(keyValue);
+  db.prepare(
+    `INSERT INTO user_keys (workos_user_id, workos_key_id, key_value, name, is_default)
+     VALUES (?, ?, ?, 'Default', 1)
+     ON CONFLICT (workos_user_id) WHERE is_default = 1
+     DO UPDATE SET workos_key_id = ?, key_value = ?`
+  ).run(workosUserId, workosKeyId, encrypted, workosKeyId, encrypted);
+}
+
+export function deleteUserKey(workosKeyId: string): boolean {
+  const db = getDb();
+  const result = db
+    .prepare("DELETE FROM user_keys WHERE workos_key_id = ?")
+    .run(workosKeyId);
+  return result.changes > 0;
 }
