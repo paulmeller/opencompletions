@@ -9,7 +9,7 @@ import { getState } from "@/lib/oc/state";
 import { normalizeResponseFormat } from "@/lib/oc/helpers";
 import { CLI_PROVIDERS, getCliProvider } from "@/lib/oc/cli-providers";
 import * as files from "@/lib/oc/files";
-import { logRunStart, logRunComplete, logRunEvents } from "@/lib/db";
+import { logRunStart, logRunComplete, logRunEvents, getSkill, listSkillsByTags } from "@/lib/db";
 import type { AgentOpts } from "@/lib/oc/types";
 
 export async function POST(request: Request) {
@@ -190,8 +190,78 @@ export async function POST(request: Request) {
     responseFormat: normalizeResponseFormat(body.response_format as string | { type: string } | undefined),
   };
 
-  // Auto-inject skills MCP server if not provided in mcp_servers
-  if (!agentOpts.mcpServers) {
+  // Parse skill_filter and preload_skills fields
+  const skillFilter = body.skill_filter as { names?: string[]; tags?: string[] } | undefined;
+  const preloadSkills = body.preload_skills as Array<{
+    name?: string;
+    instructions?: string;
+    resources?: Record<string, string>;
+  }> | undefined;
+
+  // Resolve skill filter to concrete names
+  let filterNames: string[] | null = null;
+  if (skillFilter) {
+    const nameSet = new Set<string>(skillFilter.names || []);
+    if (skillFilter.tags?.length) {
+      const tagSkills = listSkillsByTags(skillFilter.tags);
+      for (const s of tagSkills) nameSet.add(s.name);
+    }
+    filterNames = Array.from(nameSet);
+  }
+
+  // Preload skills into system prompt
+  const preloadedNames = new Set<string>();
+  const MAX_PRELOAD_SIZE = 100 * 1024; // 100KB
+  let preloadContent = "";
+  let preloadSize = 0;
+
+  if (preloadSkills?.length) {
+    for (const item of preloadSkills) {
+      let section = "";
+
+      if (item.name) {
+        // Load from DB
+        const skill = getSkill(item.name);
+        if (!skill) continue;
+        preloadedNames.add(item.name);
+        section = `## Skill: ${skill.display_name}\n\n${skill.instructions || ""}`;
+        // Include resources
+        for (const r of skill.resources || []) {
+          section += `\n\n### Reference: ${r.file_name}\n\n${r.content}`;
+        }
+      } else if (item.instructions) {
+        // Inline content
+        section = `## Inline Skill\n\n${item.instructions}`;
+        if (item.resources) {
+          for (const [fname, content] of Object.entries(item.resources)) {
+            section += `\n\n### Reference: ${fname}\n\n${content}`;
+          }
+        }
+      }
+
+      if (section) {
+        if (preloadSize + section.length > MAX_PRELOAD_SIZE) {
+          break; // cap at 100KB
+        }
+        preloadContent += (preloadContent ? "\n\n---\n\n" : "") + section;
+        preloadSize += section.length;
+      }
+    }
+
+    if (preloadContent) {
+      agentOpts.systemPrompt = agentOpts.systemPrompt
+        ? `${preloadContent}\n\n${agentOpts.systemPrompt}`
+        : preloadContent;
+    }
+  }
+
+  // Deduplicate: remove preloaded skills from MCP filter
+  if (filterNames && preloadedNames.size > 0) {
+    filterNames = filterNames.filter((n) => !preloadedNames.has(n));
+  }
+
+  // Inject skills MCP server, merging with any per-request MCP servers
+  {
     const host = request.headers.get("x-forwarded-host")
       || request.headers.get("host")
       || `localhost:${process.env.PORT || 3000}`;
@@ -200,13 +270,26 @@ export async function POST(request: Request) {
 
     // Use SESSION_SECRET as internal token for MCP auth
     const mcpAuthToken = process.env.SESSION_SECRET || "";
-    agentOpts.mcpServers = {
-      skills: {
-        type: "http",
-        url: `${dashboardUrl}/api/mcp`,
-        headers: mcpAuthToken ? { Authorization: `Bearer ${mcpAuthToken}` } : {},
-      },
-    };
+
+    // Build MCP URL with optional skill filter
+    let mcpUrl = `${dashboardUrl}/api/mcp`;
+    if (filterNames && filterNames.length > 0) {
+      mcpUrl += `?skills=${filterNames.join(",")}`;
+    }
+
+    // Skip MCP entirely if all skills are preloaded and no filter needed
+    const shouldInjectMcp = !preloadSkills?.length || (filterNames && filterNames.length > 0) || !skillFilter;
+
+    if (shouldInjectMcp) {
+      agentOpts.mcpServers = {
+        skills: {
+          type: "http",
+          url: mcpUrl,
+          headers: mcpAuthToken ? { Authorization: `Bearer ${mcpAuthToken}` } : {},
+        },
+        ...(agentOpts.mcpServers || {}),
+      };
+    }
   }
 
   // Auto-inject file manifest into system prompt

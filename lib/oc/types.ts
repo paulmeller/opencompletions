@@ -99,6 +99,10 @@ export interface AgentOpts {
   stream?: boolean;
   onEvent?: (event: AgentEvent) => void;
 
+  /** Filter which skills the MCP server exposes (by name and/or tag). */
+  skillFilter?: { names?: string[]; tags?: string[] };
+  /** Inject skill content directly into the system prompt (no MCP round-trip). */
+  preloadSkills?: Array<{ name?: string; instructions?: string; resources?: Record<string, string> }>;
   /** Per-request client token forwarded to the CLI for LLM auth. */
   clientToken?: string;
   /** Timeout for the agent run (overrides config.agentTimeout). */

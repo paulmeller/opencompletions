@@ -50,10 +50,14 @@ function toolResult(text: string, isError = false) {
   return { content: [{ type: "text", text }], isError };
 }
 
-function handleToolCall(name: string, args: Record<string, string>) {
+function handleToolCall(name: string, args: Record<string, string>, allowedSkills: string[] | null) {
   switch (name) {
     case "list_skills": {
-      const skills = listSkills();
+      let skills = listSkills();
+      if (allowedSkills) {
+        const allowed = new Set(allowedSkills);
+        skills = skills.filter((s) => allowed.has(s.name));
+      }
       const summary = skills.map((s) => ({
         name: s.name,
         display_name: s.display_name,
@@ -67,6 +71,9 @@ function handleToolCall(name: string, args: Record<string, string>) {
     case "activate_skill": {
       const skillName = args.skill_name;
       if (!skillName) return toolResult("Missing skill_name parameter", true);
+      if (allowedSkills && !allowedSkills.includes(skillName)) {
+        return toolResult(`Skill "${skillName}" is not in the allowed skill list`, true);
+      }
       const skill = getSkill(skillName);
       if (!skill) return toolResult(`Skill "${skillName}" not found`, true);
       return toolResult(skill.instructions || "(no instructions)");
@@ -76,6 +83,9 @@ function handleToolCall(name: string, args: Record<string, string>) {
       const { skill_name, file_name } = args;
       if (!skill_name || !file_name)
         return toolResult("Missing skill_name or file_name parameter", true);
+      if (allowedSkills && !allowedSkills.includes(skill_name)) {
+        return toolResult(`Skill "${skill_name}" is not in the allowed skill list`, true);
+      }
       const resource = getSkillResource(skill_name, file_name);
       if (!resource)
         return toolResult(
@@ -94,6 +104,11 @@ export async function POST(request: Request) {
   // Auth: accept Bearer token or WorkOS session
   const auth = await requireAuth(request);
   if (!auth.ok) return auth.response;
+
+  // Parse optional skill filter from query params
+  const url = new URL(request.url);
+  const skillsParam = url.searchParams.get("skills");
+  const allowedSkills = skillsParam ? skillsParam.split(",").filter(Boolean) : null;
 
   let body;
   try {
@@ -120,7 +135,7 @@ export async function POST(request: Request) {
       if (!toolName) {
         return jsonRpcError(id, -32602, "Missing tool name");
       }
-      const result = handleToolCall(toolName, params.arguments || {});
+      const result = handleToolCall(toolName, params.arguments || {}, allowedSkills);
       return jsonRpcOk(id, result);
     }
 

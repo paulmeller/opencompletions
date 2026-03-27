@@ -278,6 +278,40 @@ export function getSkill(name: string): SkillFull | null {
   return { ...skill, resources };
 }
 
+export function listSkillsByNames(names: string[]): SkillFull[] {
+  if (!names.length) return [];
+  const db = getDb();
+  const placeholders = names.map(() => "?").join(",");
+  const skills = db.prepare(
+    `SELECT * FROM skills WHERE name IN (${placeholders}) ORDER BY name`
+  ).all(...names) as SkillRow[];
+  const resourceStmt = db.prepare(
+    "SELECT file_name, content FROM skill_resources WHERE skill_id = ?"
+  );
+  return skills.map((skill) => ({
+    ...skill,
+    resources: resourceStmt.all(skill.id) as SkillResource[],
+  }));
+}
+
+export function listSkillsByTags(tags: string[]): SkillFull[] {
+  if (!tags.length) return [];
+  const db = getDb();
+  // tags column is a JSON array string, use LIKE for each tag
+  const conditions = tags.map(() => "tags LIKE ?").join(" OR ");
+  const params = tags.map((t) => `%"${t}"%`);
+  const skills = db.prepare(
+    `SELECT * FROM skills WHERE ${conditions} ORDER BY name`
+  ).all(...params) as SkillRow[];
+  const resourceStmt = db.prepare(
+    "SELECT file_name, content FROM skill_resources WHERE skill_id = ?"
+  );
+  return skills.map((skill) => ({
+    ...skill,
+    resources: resourceStmt.all(skill.id) as SkillResource[],
+  }));
+}
+
 export function getSkillResource(
   skillName: string,
   fileName: string

@@ -1539,6 +1539,26 @@
           "timeout_ms": {
             "type": ["integer", "null"],
             "description": "Per-request timeout in milliseconds (default: 600000 = 10 min)"
+          },
+          "skill_filter": {
+            "type": "object",
+            "properties": {
+              "names": { "type": "array", "items": { "type": "string" }, "description": "Whitelist skills by name" },
+              "tags": { "type": "array", "items": { "type": "string" }, "description": "Whitelist skills by tag" }
+            },
+            "description": "Filter which skills the MCP server exposes"
+          },
+          "preload_skills": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string", "description": "Load a DB skill by name into the system prompt" },
+                "instructions": { "type": "string", "description": "Inline skill instructions" },
+                "resources": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Inline resource files" }
+              }
+            },
+            "description": "Inject skill content directly into the system prompt (no MCP round-trip)"
           }
         },
         "required": ["prompt"]
