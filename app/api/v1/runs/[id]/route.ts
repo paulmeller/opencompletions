@@ -1,9 +1,8 @@
 export const runtime = "nodejs";
 
 import { ensureInitialized } from "@/lib/oc/init";
-import { authenticateRequest } from "@/lib/oc/auth-api";
+import { authorize } from "@/lib/oc/authenticate";
 import { getRun } from "@/lib/db";
-import { getConfig } from "@/lib/oc/config";
 
 export async function GET(
   request: Request,
@@ -11,15 +10,8 @@ export async function GET(
 ) {
   await ensureInitialized();
 
-  const authContext = await authenticateRequest(request);
-  const config = getConfig();
-
-  if (config.apiKey && !authContext) {
-    return Response.json(
-      { error: { message: "Invalid API key", type: "authentication_error", code: 401 } },
-      { status: 401 },
-    );
-  }
+  const auth = await authorize(request);
+  if (!auth.ok) return auth.response;
 
   const { id } = await params;
   const runId = decodeURIComponent(id);

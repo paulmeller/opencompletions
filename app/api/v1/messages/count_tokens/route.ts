@@ -1,22 +1,14 @@
 export const runtime = "nodejs";
 
 import { ensureInitialized } from "@/lib/oc/init";
-import { authenticateRequest } from "@/lib/oc/auth-api";
-import { getConfig } from "@/lib/oc/config";
+import { authorize } from "@/lib/oc/authenticate";
 import { extractAnthropicPrompt } from "@/lib/oc/response-builders";
 
 export async function POST(request: Request) {
   await ensureInitialized();
 
-  const authContext = await authenticateRequest(request);
-  const config = getConfig();
-
-  if (config.apiKey && !authContext) {
-    return Response.json(
-      { error: { message: "Invalid API key", type: "authentication_error", code: 401 } },
-      { status: 401 },
-    );
-  }
+  const auth = await authorize(request);
+  if (!auth.ok) return auth.response;
 
   let body: Record<string, unknown>;
   try {

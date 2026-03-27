@@ -1,8 +1,7 @@
 export const runtime = "nodejs";
 
 import { ensureInitialized } from "@/lib/oc/init";
-import { authenticateRequest } from "@/lib/oc/auth-api";
-import { getConfig } from "@/lib/oc/config";
+import { authorize } from "@/lib/oc/authenticate";
 import { getState } from "@/lib/oc/state";
 import * as files from "@/lib/oc/files";
 
@@ -16,15 +15,8 @@ export async function GET(
 ) {
   await ensureInitialized();
 
-  const authContext = await authenticateRequest(request);
-  const config = getConfig();
-
-  if (config.apiKey && !authContext) {
-    return Response.json(
-      { error: { message: "Invalid API key", type: "authentication_error", code: 401 } },
-      { status: 401 },
-    );
-  }
+  const auth = await authorize(request);
+  if (!auth.ok) return auth.response;
 
   const { workspaceId } = await params;
 
@@ -50,15 +42,8 @@ export async function DELETE(
 ) {
   await ensureInitialized();
 
-  const authContext = await authenticateRequest(request);
-  const config = getConfig();
-
-  if (config.apiKey && !authContext) {
-    return Response.json(
-      { error: { message: "Invalid API key", type: "authentication_error", code: 401 } },
-      { status: 401 },
-    );
-  }
+  const auth = await authorize(request);
+  if (!auth.ok) return auth.response;
 
   const { workspaceId } = await params;
   const state = getState();

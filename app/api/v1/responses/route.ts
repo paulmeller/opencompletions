@@ -2,8 +2,7 @@ export const runtime = "nodejs";
 export { handleOptions as OPTIONS } from "@/lib/oc/cors";
 
 import { ensureInitialized } from "@/lib/oc/init";
-import { authenticateRequest } from "@/lib/oc/auth-api";
-import { getConfig } from "@/lib/oc/config";
+import { authorize } from "@/lib/oc/authenticate";
 import { enqueue } from "@/lib/oc/queue";
 import {
   extractResponsesPrompt,
@@ -14,15 +13,8 @@ import { handleResponsesStream } from "@/lib/oc/streaming";
 export async function POST(request: Request) {
   await ensureInitialized();
 
-  const authContext = await authenticateRequest(request);
-  const config = getConfig();
-
-  if (config.apiKey && !authContext) {
-    return Response.json(
-      { error: { message: "Invalid API key", type: "authentication_error", code: 401 } },
-      { status: 401 },
-    );
-  }
+  const auth = await authorize(request);
+  if (!auth.ok) return auth.response;
 
   const forwardToken = request.headers.get("x-api-key") || null;
 

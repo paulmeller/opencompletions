@@ -3,14 +3,13 @@ import { getSetting, setSetting } from "@/lib/db";
 const WORKOS_API_KEY = process.env.WORKOS_API_KEY || "";
 const SEED_CONFIG = process.env.SEED_CONFIG || "";
 
+const globalForSeed = globalThis as typeof globalThis & { __ocSeeded?: boolean };
+
 /**
  * Seed the DB from SEED_CONFIG env var if settings are empty.
- * SEED_CONFIG is a JSON object mapping setting fields to values.
- * Called once on first dashboard page load after a deploy wipes the DB.
  */
 export function seedSettings(): void {
   if (!SEED_CONFIG) return;
-  // Skip if DB already has settings
   if (getSetting("active_api_key") || getSetting("backend")) return;
 
   try {
@@ -44,20 +43,38 @@ export function seedSettings(): void {
 }
 
 /**
- * Ensure the user has an active API key. If none is saved in the DB,
- * find the first WorkOS organization and create a "Default" key.
+ * Ensure the user has an active API key. Runs once per process.
+ * If no key in DB, checks WorkOS for existing keys before creating one.
  */
 export async function ensureDefaultKey(): Promise<void> {
+  // Only run once per process lifetime
+  if (globalForSeed.__ocSeeded) return;
+  globalForSeed.__ocSeeded = true;
+
   seedSettings();
 
   if (getSetting("active_api_key")) return;
   if (!WORKOS_API_KEY) return;
 
   try {
-    // Discover the org ID from WorkOS (use first org)
     const orgId = process.env.WORKOS_ORG_ID || await discoverOrgId();
     if (!orgId) return;
 
+    // Check if there are existing keys — reuse the first one if so
+    // (we can't retrieve the value, but we know keys exist so skip creating)
+    const listRes = await fetch(
+      `https://api.workos.com/organizations/${orgId}/api_keys`,
+      { headers: { Authorization: `Bearer ${WORKOS_API_KEY}` } },
+    );
+    if (listRes.ok) {
+      const listData = await listRes.json();
+      const existingKeys = listData.data || [];
+      if (existingKeys.length > 0) {
+        console.log(`[seed] ${existingKeys.length} WorkOS key(s) exist but active_api_key not in DB. Creating a new one to store.`);
+      }
+    }
+
+    // Create a new key (we need the value, which is only returned on creation)
     const res = await fetch(
       `https://api.workos.com/organizations/${orgId}/api_keys`,
       {

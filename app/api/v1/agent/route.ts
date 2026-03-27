@@ -2,7 +2,7 @@ export const runtime = "nodejs";
 export { handleOptions as OPTIONS } from "@/lib/oc/cors";
 
 import { ensureInitialized } from "@/lib/oc/init";
-import { authenticateRequest } from "@/lib/oc/auth-api";
+import { authorize } from "@/lib/oc/authenticate";
 import { handleAgentStream, handleAgentBuffered } from "@/lib/oc/streaming";
 import { getConfig } from "@/lib/oc/config";
 import { getState } from "@/lib/oc/state";
@@ -15,15 +15,10 @@ import type { AgentOpts } from "@/lib/oc/types";
 export async function POST(request: Request) {
   await ensureInitialized();
 
-  const authContext = await authenticateRequest(request);
-  const config = getConfig();
+  const auth = await authorize(request);
+  if (!auth.ok) return auth.response;
 
-  if (config.apiKey && !authContext) {
-    return Response.json(
-      { error: { message: "Invalid API key", type: "authentication_error", code: 401 } },
-      { status: 401 },
-    );
-  }
+  const config = getConfig();
 
   // Parse JSON body
   let body: Record<string, unknown>;
@@ -227,8 +222,8 @@ export async function POST(request: Request) {
 
   // Log run start
   const runId = logRunStart({
-    apiKeyId: authContext?.keyId,
-    orgId: authContext?.orgId,
+    apiKeyId: auth.authContext?.keyId,
+    orgId: auth.authContext?.orgId,
     sessionId: body.session_id as string | undefined,
     workspaceId: wsId || undefined,
     prompt: body.prompt as string,

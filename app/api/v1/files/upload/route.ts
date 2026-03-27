@@ -2,7 +2,7 @@ export const runtime = "nodejs";
 export { handleOptions as OPTIONS } from "@/lib/oc/cors";
 
 import { ensureInitialized } from "@/lib/oc/init";
-import { authenticateRequest } from "@/lib/oc/auth-api";
+import { authorize } from "@/lib/oc/authenticate";
 import { getConfig } from "@/lib/oc/config";
 import { getState } from "@/lib/oc/state";
 import * as files from "@/lib/oc/files";
@@ -10,15 +10,10 @@ import * as files from "@/lib/oc/files";
 export async function POST(request: Request) {
   await ensureInitialized();
 
-  const authContext = await authenticateRequest(request);
-  const config = getConfig();
+  const auth = await authorize(request);
+  if (!auth.ok) return auth.response;
 
-  if (config.apiKey && !authContext) {
-    return Response.json(
-      { error: { message: "Invalid API key", type: "authentication_error", code: 401 } },
-      { status: 401 },
-    );
-  }
+  const config = getConfig();
 
   // Validate filename from header
   const rawFilename = request.headers.get("x-filename");
