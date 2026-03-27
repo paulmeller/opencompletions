@@ -180,14 +180,7 @@ export default function KeysPage() {
                 {keys.map((key) => (
                   <TableRow key={key.id}>
                     <TableCell className="font-medium">{key.name}</TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1">
-                        <span className="font-mono text-xs text-muted-foreground">{key.obfuscated_value}</span>
-                        <Button variant="ghost" size="sm" onClick={() => copyToClipboard(key.obfuscated_value)} title="Copy key ID">
-                          <Copy />
-                        </Button>
-                      </div>
-                    </TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">{key.obfuscated_value}</TableCell>
                     <TableCell className="hidden md:table-cell">
                       {key.permissions.length === 0 ? (
                         <span className="text-xs text-muted-foreground">All</span>
