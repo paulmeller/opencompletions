@@ -13,7 +13,9 @@
       "Bash(lsof -ti:3456)",
       "Bash(xargs kill:*)",
       "Bash(fuser -k 3456/tcp)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(ls -la /Users/paulmeller/Projects/opencompletions/.env*)",
+      "Read(//Users/paulmeller/Projects/opencompletions-dashboard/**)"
     ]
   }
 }
