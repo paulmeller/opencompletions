@@ -780,6 +780,76 @@
         }
       }
     },
+    "/api/skills/import": {
+      "post": {
+        "operationId": "importSkill",
+        "summary": "Import a skill from SKILL.md format",
+        "description": "Parses a SKILL.md file (YAML frontmatter + markdown body) and creates or updates a skill. Accepts a single item or an array for bulk import. Supports upsert to overwrite existing skills.",
+        "tags": ["Skills"],
+        "security": [{ "BearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  { "$ref": "#/components/schemas/SkillImportItem" },
+                  {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/SkillImportItem" }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Skill created (single import)" },
+          "200": { "description": "Skill updated (single upsert) or bulk results" },
+          "400": { "description": "Invalid input" },
+          "409": { "description": "Skill already exists (no upsert)" }
+        }
+      }
+    },
+    "/api/skills/{name}/export": {
+      "get": {
+        "operationId": "exportSkill",
+        "summary": "Export a skill as SKILL.md format",
+        "description": "Returns the skill as a reconstructed SKILL.md (frontmatter + instructions) with a resources map. Enables round-trip: export → edit → re-import.",
+        "tags": ["Skills"],
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "The skill slug"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exported skill",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "skill_md": { "type": "string", "description": "Reconstructed SKILL.md content" },
+                    "resources": {
+                      "type": "object",
+                      "additionalProperties": { "type": "string" },
+                      "description": "Map of resource filename → content"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": { "description": "Skill not found" }
+        }
+      }
+    },
     "/api/v1/files/upload": {
       "post": {
         "operationId": "uploadFile",
@@ -1041,6 +1111,30 @@
       }
     },
     "schemas": {
+      "SkillImportItem": {
+        "type": "object",
+        "required": ["skill_md"],
+        "properties": {
+          "skill_md": {
+            "type": "string",
+            "description": "SKILL.md content with YAML frontmatter (---name, description, tags---) and markdown body (instructions)"
+          },
+          "resources": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "Map of resource filename → content (e.g. {\"risk-rubric.md\": \"# Rubric\\n...\"})"
+          },
+          "name": {
+            "type": "string",
+            "description": "Override the skill slug (otherwise derived from frontmatter name)"
+          },
+          "upsert": {
+            "type": "boolean",
+            "description": "If true, overwrite existing skill with same name",
+            "default": false
+          }
+        }
+      },
       "ErrorResponse": {
         "type": "object",
         "properties": {
