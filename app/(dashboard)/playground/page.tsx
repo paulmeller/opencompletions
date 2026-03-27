@@ -103,8 +103,6 @@ export default function PlaygroundPage() {
   const [startTime, setStartTime] = useState<number | null>(null);
   const [userScrolledUp, setUserScrolledUp] = useState(false);
   const [history, setHistory] = useState<string[]>([]);
-  const [hasApiKey, setHasApiKey] = useState<boolean | null>(null); // null = loading
-
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const apiKeyRef = useRef<HTMLInputElement>(null);
@@ -118,9 +116,6 @@ export default function PlaygroundPage() {
         setSelectedBackend(d.default || d.available[0]);
       }
     }).catch(() => {});
-    fetch("/api/settings").then((r) => r.json()).then((settings: Array<{ key: string }>) => {
-      setHasApiKey(settings.some((s) => s.key === "active_api_key"));
-    }).catch(() => setHasApiKey(true)); // assume yes on error
     try {
       const h = JSON.parse(localStorage.getItem("oc-playground-history") || "[]");
       setHistory(h);
@@ -155,43 +150,9 @@ export default function PlaygroundPage() {
     }
   }, [running]);
 
-  // Ensure an API key exists, creating one if needed
-  const ensureApiKey = useCallback(async (): Promise<boolean> => {
-    if (hasApiKey) return true;
-    try {
-      const res = await fetch("/api/keys", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "Default" }),
-      });
-      if (!res.ok) return false;
-      const key = await res.json();
-      if (key.value) {
-        // Save as active API key
-        await fetch("/api/settings", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ active_api_key: key.value }),
-        });
-        setHasApiKey(true);
-        return true;
-      }
-      return false;
-    } catch {
-      return false;
-    }
-  }, [hasApiKey]);
-
   // Send
   const handleSend = useCallback(async () => {
     if (!prompt.trim() || running) return;
-
-    // Auto-create API key if none exists
-    const keyReady = await ensureApiKey();
-    if (!keyReady) {
-      setError("Failed to create API key. Check WorkOS configuration.");
-      return;
-    }
 
     const h = [prompt.trim(), ...history.filter((x) => x !== prompt.trim())].slice(0, 5);
     setHistory(h);
@@ -299,21 +260,6 @@ export default function PlaygroundPage() {
 
   const items = buildConversation(events);
   const hasContent = items.length > 0 || running;
-
-  if (hasApiKey === false) {
-    return (
-      <div className="max-w-xl flex flex-col gap-4 pt-8">
-        <h2 className="text-lg font-semibold">Playground</h2>
-        <Alert>
-          <AlertDescription>
-            No API key configured. Create one on the{" "}
-            <a href="/keys" className="text-primary underline-offset-4 hover:underline font-medium">Keys page</a>{" "}
-            to use the playground.
-          </AlertDescription>
-        </Alert>
-      </div>
-    );
-  }
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)]">

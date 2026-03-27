@@ -15,13 +15,16 @@ export async function requireAuth(
   request: Request
 ): Promise<{ ok: true } | { ok: false; response: Response }> {
   // Mode 1: Bearer token (machine-to-machine)
-  // Accept the active API key (WorkOS key saved by user) or CONFIG_TOKEN
+  // Accept CONFIG_TOKEN, SESSION_SECRET (internal MCP), or active_api_key from DB
   const auth = request.headers.get("authorization");
   if (auth) {
     const token = auth.replace("Bearer ", "");
-    const activeKey = getSetting("active_api_key");
     const configToken = process.env.CONFIG_TOKEN || "";
-    if ((activeKey && safeEqual(token, activeKey)) || (configToken && safeEqual(token, configToken))) {
+    const sessionSecret = process.env.SESSION_SECRET || "";
+    const activeKey = getSetting("active_api_key");
+    if ((configToken && safeEqual(token, configToken))
+      || (sessionSecret && safeEqual(token, sessionSecret))
+      || (activeKey && safeEqual(token, activeKey))) {
       return { ok: true };
     }
   }

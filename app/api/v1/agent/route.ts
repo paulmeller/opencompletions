@@ -189,8 +189,8 @@ export async function POST(request: Request) {
     const dashboardUrl = process.env.MCP_BASE_URL || `${proto}://${host}`;
 
     // Use the active API key for MCP auth (same server, same DB)
-    const { getSetting } = await import("@/lib/db");
-    const mcpAuthToken = getSetting("active_api_key") || config.apiKey || "";
+    // Use SESSION_SECRET as internal token — the MCP route accepts it via requireAuth/CONFIG_TOKEN
+    const mcpAuthToken = process.env.SESSION_SECRET || process.env.CONFIG_TOKEN || "";
     agentOpts.mcpServers = {
       skills: {
         type: "http",
