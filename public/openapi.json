@@ -788,7 +788,7 @@
       "post": {
         "operationId": "importSkill",
         "summary": "Import a skill from SKILL.md format",
-        "description": "Parses a SKILL.md file (YAML frontmatter + markdown body) and creates or updates a skill. Accepts a single item or an array for bulk import. Supports upsert to overwrite existing skills.",
+        "description": "Parses a SKILL.md file (YAML frontmatter + markdown body) and creates or updates a skill. Accepts a single item or an array for bulk import. Supports upsert and auto_apply (skills with auto_apply=true inject into every request automatically).",
         "tags": ["Skills"],
         "security": [{ "BearerAuth": [] }],
         "requestBody": {
@@ -1135,6 +1135,11 @@
           "upsert": {
             "type": "boolean",
             "description": "If true, overwrite existing skill with same name",
+            "default": false
+          },
+          "auto_apply": {
+            "type": "boolean",
+            "description": "If true, this skill's instructions are automatically injected into every request's system prompt. No preload_skills needed by the caller.",
             "default": false
           }
         }
