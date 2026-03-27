@@ -1,7 +1,6 @@
 import { getSetting, setSetting } from "@/lib/db";
 
 const WORKOS_API_KEY = process.env.WORKOS_API_KEY || "";
-const ORG_ID = process.env.WORKOS_ORG_ID || "";
 const SEED_CONFIG = process.env.SEED_CONFIG || "";
 
 /**
@@ -46,17 +45,21 @@ export function seedSettings(): void {
 
 /**
  * Ensure the user has an active API key. If none is saved in the DB,
- * create a "Default" key via WorkOS and store it.
+ * find the first WorkOS organization and create a "Default" key.
  */
 export async function ensureDefaultKey(): Promise<void> {
   seedSettings();
 
   if (getSetting("active_api_key")) return;
-  if (!WORKOS_API_KEY || !ORG_ID) return;
+  if (!WORKOS_API_KEY) return;
 
   try {
+    // Discover the org ID from WorkOS (use first org)
+    const orgId = process.env.WORKOS_ORG_ID || await discoverOrgId();
+    if (!orgId) return;
+
     const res = await fetch(
-      `https://api.workos.com/organizations/${ORG_ID}/api_keys`,
+      `https://api.workos.com/organizations/${orgId}/api_keys`,
       {
         method: "POST",
         headers: {
@@ -76,4 +79,17 @@ export async function ensureDefaultKey(): Promise<void> {
       console.log("[seed] Default API key created and saved");
     }
   } catch {}
+}
+
+async function discoverOrgId(): Promise<string | null> {
+  try {
+    const res = await fetch("https://api.workos.com/organizations?limit=1", {
+      headers: { Authorization: `Bearer ${WORKOS_API_KEY}` },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.data?.[0]?.id || null;
+  } catch {
+    return null;
+  }
 }
