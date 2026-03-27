@@ -39,18 +39,57 @@ Single Next.js app with:
 
 ## Key Endpoints
 
-All under `/api/v1/`:
+All completion endpoints route through the **agent pipeline** with full MCP tool use and skill support.
 
-- `POST /api/v1/chat/completions` — OpenAI chat
-- `POST /api/v1/completions` — OpenAI legacy
-- `POST /api/v1/messages` — Anthropic messages
-- `POST /api/v1/agent` — Multi-turn agent (SSE streaming)
-- `POST /api/v1/setup` — Run setup commands on backends (admin-only, requires dashboard session)
+**Completion endpoints** (all POST, all support `skill_filter` + `preload_skills`):
+- `/api/v1/chat/completions` — OpenAI chat format
+- `/api/v1/completions` — OpenAI legacy format
+- `/api/v1/messages` — Anthropic messages format
+- `/api/v1/responses` — OpenAI responses format
+- `/api/v1/agent` — Multi-turn agent (SSE streaming, workspace, run logging)
+
+**Management endpoints**:
+- `POST /api/v1/setup` — Run setup commands on backends (admin-only)
 - `GET /api/v1/models` — Model list
 - `GET /api/v1/backends` — Available backends
 - `GET /api/v1/runs` — Agent run history
 - `POST /api/v1/files/upload` — Upload to workspace
 - `POST /api/mcp` — Skills MCP server (JSON-RPC 2.0)
+
+**Skills management**:
+- `GET/POST /api/skills` — List/create skills
+- `POST /api/skills/import` — Import from SKILL.md format (single or bulk, upsert)
+- `GET /api/skills/{name}/export` — Export as SKILL.md format
+
+## Skills
+
+Skills are domain-specific instructions + reference files that agents can use. Stored in SQLite, served via MCP.
+
+**Loading skills in requests** (all completion endpoints support these fields):
+- `skill_filter: {names?, tags?}` — whitelist which DB skills the MCP exposes
+- `preload_skills: [{name?} | {instructions?, resources?}]` — inject skill content directly into system prompt (no MCP round-trip, 100KB cap)
+
+**Modes**:
+1. No skill params → all DB skills available via MCP (default)
+2. `skill_filter` only → MCP exposes filtered subset, agent discovers via tool use
+3. `preload_skills` only → instructions injected into prompt, MCP skipped
+4. Both → preloaded in prompt + filtered MCP for additional discovery
+
+**Import/Export**:
+- `POST /api/skills/import` — accepts SKILL.md format (YAML frontmatter + markdown body + resources map), supports bulk and upsert
+- `GET /api/skills/{name}/export` — returns SKILL.md + resources for round-trip editing
+
+**SKILL.md format**:
+```
+---
+name: Contract Risk Analyzer
+description: Analyzes contracts for risk
+tags: [legal, contracts]
+---
+
+# Instructions
+When activated, analyze the contract...
+```
 
 ## Authentication
 
@@ -89,12 +128,16 @@ Single SQLite file with 5 tables:
 ## Testing
 
 ```bash
-# Build check
-npm run build
+npm test              # Unit tests (helpers + DB, 70 tests)
+npm run test:helpers  # Helper function tests only
+npm run test:db       # Database operation tests only
+npm run test:endpoints # Integration tests (requires running server)
+npm run build         # Type check + build
 
-# Test endpoints
-curl http://localhost:3000/api/v1/models
+# Manual endpoint tests
 curl http://localhost:3000/api/health
+curl http://localhost:3000/api/v1/models
+curl -H "Authorization: Bearer $KEY" http://localhost:3000/api/v1/backends
 ```
 
 ## Key Directories
@@ -103,7 +146,8 @@ curl http://localhost:3000/api/health
 - `app/api/v1/` — External API routes
 - `app/api/` — Dashboard management routes (keys, settings, skills, mcp)
 - `lib/oc/` — Engine modules (config, state, queue, backends, streaming, etc.)
-- `lib/oc/backends/` — Execution backends (local, sprite, vercel)
+- `lib/oc/backends/` — Execution backends (local, sprite, vercel, cloudflare)
+- `lib/oc/skill-loader.ts` — Shared skill resolution (filter + preload) for all routes
 - `lib/` — Shared utilities (db, auth, utils)
 - `components/` — UI components (shadcn/ui)
 - `public/` — Static assets (openapi.json)
