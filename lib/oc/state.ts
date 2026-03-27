@@ -12,7 +12,7 @@
  * Ported from server.js lines 150-179, 245-278.
  */
 
-import type { SpriteEntry, VercelSandbox, QueueJob } from "./types";
+import type { SpriteEntry, VercelSandbox, CloudflareSandbox, QueueJob } from "./types";
 import type { ChildProcess } from "child_process";
 
 // ---------------------------------------------------------------------------
@@ -27,14 +27,17 @@ export interface OcState {
   // Backend pools
   spritePool: SpriteEntry[];
   vercelPool: VercelSandbox[];
+  cloudflarePool: CloudflareSandbox[];
 
   // Agent session affinity
-  sessionToSprite: Map<string, string>;   // session_id -> sprite name
-  sessionToSandbox: Map<string, string>;  // session_id -> sandbox id
+  sessionToSprite: Map<string, string>;      // session_id -> sprite name
+  sessionToSandbox: Map<string, string>;     // session_id -> vercel sandbox id
+  sessionToCloudflare: Map<string, string>;  // session_id -> cloudflare sandbox id
 
   // Workspace-to-backend binding (eager allocation)
-  workspaceToSprite: Map<string, string>;   // workspace_id -> sprite name
-  workspaceToSandbox: Map<string, string>;  // workspace_id -> sandbox id
+  workspaceToSprite: Map<string, string>;      // workspace_id -> sprite name
+  workspaceToSandbox: Map<string, string>;     // workspace_id -> vercel sandbox id
+  workspaceToCloudflare: Map<string, string>;  // workspace_id -> cloudflare sandbox id
 
   // Session eviction timestamps
   sessionTimestamps: Map<string, number>;   // session_id -> last-access timestamp
@@ -62,12 +65,15 @@ export function getState(): OcState {
 
     spritePool: [],
     vercelPool: [],
+    cloudflarePool: [],
 
     sessionToSprite: new Map(),
     sessionToSandbox: new Map(),
+    sessionToCloudflare: new Map(),
 
     workspaceToSprite: new Map(),
     workspaceToSandbox: new Map(),
+    workspaceToCloudflare: new Map(),
 
     sessionTimestamps: new Map(),
   };
@@ -84,6 +90,7 @@ export function getState(): OcState {
         s.sessionTimestamps.delete(sid);
         s.sessionToSprite.delete(sid);
         s.sessionToSandbox.delete(sid);
+        s.sessionToCloudflare.delete(sid);
       }
     }
   }, 30 * 60 * 1000);
@@ -145,6 +152,29 @@ export function acquireVercelSandbox(): VercelSandbox {
 
 /** Decrement the busy counter for a Vercel sandbox. */
 export function releaseVercelSandbox(sandbox: VercelSandbox): void {
+  sandbox.busy = Math.max(0, sandbox.busy - 1);
+}
+
+/**
+ * Acquire the least-busy healthy Cloudflare sandbox.
+ * Skips sandboxes that are currently being replaced.
+ */
+export function acquireCloudflareSandbox(): CloudflareSandbox {
+  const { cloudflarePool } = getState();
+  let sandbox: CloudflareSandbox | null = null;
+  for (let i = 0; i < cloudflarePool.length; i++) {
+    if (cloudflarePool[i].replacing) continue;
+    if (!sandbox || cloudflarePool[i].busy < sandbox.busy) {
+      sandbox = cloudflarePool[i];
+    }
+  }
+  if (!sandbox) throw new Error("No healthy Cloudflare sandboxes available");
+  sandbox.busy++;
+  return sandbox;
+}
+
+/** Decrement the busy counter for a Cloudflare sandbox. */
+export function releaseCloudflareSandbox(sandbox: CloudflareSandbox): void {
   sandbox.busy = Math.max(0, sandbox.busy - 1);
 }
 

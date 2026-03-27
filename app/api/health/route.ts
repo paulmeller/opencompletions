@@ -45,6 +45,12 @@ export async function GET() {
       active_jobs: s.busy,
     }));
   }
+  if (config.backend === "cloudflare") {
+    info.cloudflare_sandboxes = state.cloudflarePool.map((s) => ({
+      id: s.id,
+      active_jobs: s.busy,
+    }));
+  }
 
   return Response.json(info);
 }

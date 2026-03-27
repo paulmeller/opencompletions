@@ -26,9 +26,12 @@ export interface BackendFunctions {
   runSpriteStreaming: StreamingCompletionFn;
   runOnVercel: CompletionFn;
   runVercelStreaming: StreamingCompletionFn;
+  runOnCloudflare: CompletionFn;
+  runCloudflareStreaming: StreamingCompletionFn;
   runAgentLocal: AgentFn;
   runAgentOnSprite: AgentFn;
   runAgentOnVercel: AgentFn;
+  runAgentOnCloudflare: AgentFn;
 }
 
 const globalForQueue = globalThis as typeof globalThis & { __ocBackendFns?: BackendFunctions };
@@ -123,6 +126,7 @@ export function drain(): void {
         local: backendFns.runAgentLocal,
         sprite: backendFns.runAgentOnSprite,
         vercel: backendFns.runAgentOnVercel,
+        cloudflare: backendFns.runAgentOnCloudflare,
       };
       const agentFn = agentFns[job.agentOpts?.backend || config.backend];
 
@@ -145,6 +149,7 @@ export function drain(): void {
         local: streaming ? backendFns.runLocalStreaming : backendFns.runLocal,
         sprite: streaming ? backendFns.runSpriteStreaming : backendFns.runOnSprite,
         vercel: streaming ? backendFns.runVercelStreaming : backendFns.runOnVercel,
+        cloudflare: streaming ? backendFns.runCloudflareStreaming : backendFns.runOnCloudflare,
       };
       const execFn = execFns[config.backend];
 

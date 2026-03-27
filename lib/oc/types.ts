@@ -86,7 +86,7 @@ export interface AgentOpts {
   sessionId?: string;
   maxTurns?: number;
   model?: string;
-  backend?: "local" | "sprite" | "vercel";
+  backend?: "local" | "sprite" | "vercel" | "cloudflare";
   cli?: string;
   mcpServers?: Record<string, McpServerConfig>;
   allowedTools?: string[];
@@ -175,12 +175,21 @@ export interface VercelSandbox {
   _replacePromise?: Promise<void> | null;
 }
 
+export interface CloudflareSandbox {
+  id: string;
+  busy: number;
+  replacing?: boolean;
+  dead?: boolean;
+  /** Internal: promise for in-flight replacement (mutex). */
+  _replacePromise?: Promise<void> | null;
+}
+
 // ---------------------------------------------------------------------------
 // Config shape
 // ---------------------------------------------------------------------------
 
 export interface OcConfig {
-  backend: "local" | "sprite" | "vercel";
+  backend: "local" | "sprite" | "vercel" | "cloudflare";
   cli: string;
   concurrency: number;
   timeout: number;
@@ -195,6 +204,12 @@ export interface OcConfig {
   vercelTeamId: string;
   vercelProjectId: string;
   vercelSnapshotId: string;
+
+  // Cloudflare Sandbox
+  cloudflareAccountId: string;
+  cloudflareApiToken: string;
+  cloudflareApiUrl: string;
+
   anthropicApiKey: string;
   claudeToken: string;
   openaiApiKey: string;
@@ -202,4 +217,7 @@ export interface OcConfig {
   maxFileSize: number;
   maxWorkspaceSize: number;
   workspaceTtl: number;
+
+  /** Shell commands to run once per backend instance (e.g. plugin installs). */
+  setupCommands: string[];
 }

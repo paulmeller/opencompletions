@@ -6,7 +6,11 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "test": "npx tsx test/test-helpers.ts && npx tsx test/test-db.ts",
+    "test:helpers": "npx tsx test/test-helpers.ts",
+    "test:db": "npx tsx test/test-db.ts",
+    "test:endpoints": "node test/test-endpoints.js"
   },
   "keywords": [],
   "author": "",

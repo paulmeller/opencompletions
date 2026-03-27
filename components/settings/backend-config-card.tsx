@@ -25,6 +25,9 @@ export function BackendConfigCard() {
   const [vercelTeamId, setVercelTeamId] = useState("");
   const [vercelProjectId, setVercelProjectId] = useState("");
   const [vercelSnapshotId, setVercelSnapshotId] = useState("");
+  const [cloudflareAccountId, setCloudflareAccountId] = useState("");
+  const [cloudflareApiToken, setCloudflareApiToken] = useState("");
+  const [cloudflareApiUrl, setCloudflareApiUrl] = useState("");
   const [saved, setSaved] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,6 +60,9 @@ export function BackendConfigCard() {
       if (vercelTeamId.trim()) body.vercel_team_id = vercelTeamId.trim();
       if (vercelProjectId.trim()) body.vercel_project_id = vercelProjectId.trim();
       if (vercelSnapshotId.trim()) body.vercel_snapshot_id = vercelSnapshotId.trim();
+      if (cloudflareAccountId.trim()) body.cloudflare_account_id = cloudflareAccountId.trim();
+      if (cloudflareApiToken.trim()) body.cloudflare_api_token = cloudflareApiToken.trim();
+      if (cloudflareApiUrl.trim()) body.cloudflare_api_url = cloudflareApiUrl.trim();
 
       const res = await fetch("/api/settings", {
         method: "PUT",
@@ -74,6 +80,9 @@ export function BackendConfigCard() {
       setVercelTeamId("");
       setVercelProjectId("");
       setVercelSnapshotId("");
+      setCloudflareAccountId("");
+      setCloudflareApiToken("");
+      setCloudflareApiUrl("");
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
     } catch (err) {
@@ -102,6 +111,7 @@ export function BackendConfigCard() {
                 <SelectItem value="local">Local</SelectItem>
                 <SelectItem value="sprite">Sprite</SelectItem>
                 <SelectItem value="vercel">Vercel</SelectItem>
+                <SelectItem value="cloudflare">Cloudflare</SelectItem>
               </SelectContent>
             </Select>
           </Field>
@@ -161,6 +171,33 @@ export function BackendConfigCard() {
                 placeholder={saved.vercel_snapshot_id || "snap_..."} />
             </Field>
           </div>
+        </div>
+
+        <div className="flex flex-col gap-3 pt-2">
+          <h4 className="text-sm font-medium">Cloudflare Backend</h4>
+          <FieldDescription>
+            Requires a Cloudflare Worker proxy wrapping the Sandbox SDK. See lib/oc/backends/cloudflare.ts for details.
+          </FieldDescription>
+          <div className="grid grid-cols-2 gap-3">
+            <Field>
+              <FieldLabel>Account ID</FieldLabel>
+              <Input value={cloudflareAccountId} onChange={(e) => setCloudflareAccountId(e.target.value)}
+                placeholder={saved.cloudflare_account_id || "your-account-id"} />
+              {saved.cloudflare_account_id && <FieldDescription>Current: {saved.cloudflare_account_id}</FieldDescription>}
+            </Field>
+            <Field>
+              <FieldLabel>API Token</FieldLabel>
+              <Input type="password" value={cloudflareApiToken} onChange={(e) => setCloudflareApiToken(e.target.value)}
+                placeholder={saved.cloudflare_api_token ? "Replace" : "your-api-token"} />
+              {saved.cloudflare_api_token && <Badge variant="secondary" className="w-fit text-xs font-mono">{saved.cloudflare_api_token}</Badge>}
+            </Field>
+          </div>
+          <Field>
+            <FieldLabel>Worker Proxy URL (optional)</FieldLabel>
+            <Input value={cloudflareApiUrl} onChange={(e) => setCloudflareApiUrl(e.target.value)}
+              placeholder={saved.cloudflare_api_url || "https://your-sandbox-proxy.workers.dev"} />
+            {saved.cloudflare_api_url && <FieldDescription>Current: {saved.cloudflare_api_url}</FieldDescription>}
+          </Field>
         </div>
 
         <Button onClick={handleSave} disabled={saving}>

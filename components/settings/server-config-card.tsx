@@ -19,6 +19,8 @@ export function ServerConfigCard() {
   const [queueDepth, setQueueDepth] = useState("100");
   const [agentMaxTurns, setAgentMaxTurns] = useState("10");
   const [agentTimeout, setAgentTimeout] = useState("600000");
+  const [setupCommands, setSetupCommands] = useState("");
+  const [savedSetupCommands, setSavedSetupCommands] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [savedApiKey, setSavedApiKey] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -36,6 +38,7 @@ export function ServerConfigCard() {
         if (map.queue_depth) setQueueDepth(map.queue_depth);
         if (map.agent_max_turns) setAgentMaxTurns(map.agent_max_turns);
         if (map.agent_timeout) setAgentTimeout(map.agent_timeout);
+        if (map.setup_commands) { setSavedSetupCommands(map.setup_commands); setSetupCommands(map.setup_commands); }
         if (map.api_key) setSavedApiKey(map.api_key);
       })
       .catch(() => {});
@@ -53,6 +56,7 @@ export function ServerConfigCard() {
         agent_max_turns: agentMaxTurns,
         agent_timeout: agentTimeout,
       };
+      if (setupCommands.trim()) body.setup_commands = setupCommands.trim();
       if (apiKey.trim()) body.api_key = apiKey.trim();
 
       const res = await fetch("/api/settings", {
@@ -119,6 +123,15 @@ export function ServerConfigCard() {
             <FieldDescription>Default: 600000 (10 min)</FieldDescription>
           </Field>
         </div>
+
+        <Field>
+          <FieldLabel>Setup Commands</FieldLabel>
+          <Input value={setupCommands} onChange={(e) => setSetupCommands(e.target.value)}
+            placeholder="command1, command2 (comma-separated, run once per backend instance)" />
+          <FieldDescription>
+            {savedSetupCommands ? `Current: ${savedSetupCommands}` : "Shell commands to run on init (e.g. claude plugin install ...)"}
+          </FieldDescription>
+        </Field>
 
         <Button onClick={handleSave} disabled={saving}>
           <Save data-icon="inline-start" />

@@ -28,6 +28,9 @@ const SETTING_FIELDS: Record<string, { key: string; type: "text" | "secret" }> =
   vercel_team_id: { key: "vercel_team_id", type: "text" },
   vercel_project_id: { key: "vercel_project_id", type: "text" },
   vercel_snapshot_id: { key: "vercel_snapshot_id", type: "text" },
+  cloudflare_account_id: { key: "cloudflare_account_id", type: "text" },
+  cloudflare_api_token: { key: "cloudflare_api_token", type: "secret" },
+  cloudflare_api_url: { key: "cloudflare_api_url", type: "text" },
   // Server config
   api_key: { key: "api_key", type: "secret" },
   concurrency: { key: "concurrency", type: "text" },
@@ -35,6 +38,7 @@ const SETTING_FIELDS: Record<string, { key: string; type: "text" | "secret" }> =
   queue_depth: { key: "queue_depth", type: "text" },
   agent_max_turns: { key: "agent_max_turns", type: "text" },
   agent_timeout: { key: "agent_timeout", type: "text" },
+  setup_commands: { key: "setup_commands", type: "text" },
 };
 
 export async function PUT(request: Request) {

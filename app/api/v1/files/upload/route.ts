@@ -123,6 +123,20 @@ export async function POST(request: Request) {
         );
       }
       sandboxId = sandbox.id;
+    } else if (config.backend === "cloudflare") {
+      // Pick least-busy Cloudflare sandbox (without incrementing busy counter)
+      let sandbox = null;
+      for (let i = 0; i < state.cloudflarePool.length; i++) {
+        if (state.cloudflarePool[i].replacing) continue;
+        if (!sandbox || state.cloudflarePool[i].busy < sandbox.busy) sandbox = state.cloudflarePool[i];
+      }
+      if (!sandbox) {
+        return Response.json(
+          { error: { message: "No healthy Cloudflare sandboxes available", type: "server_error" } },
+          { status: 503 },
+        );
+      }
+      sandboxId = sandbox.id;
     }
 
     try {
@@ -130,7 +144,8 @@ export async function POST(request: Request) {
       workspaceId = result.id;
       // Track binding
       if (spriteName) state.workspaceToSprite.set(workspaceId, spriteName);
-      if (sandboxId) state.workspaceToSandbox.set(workspaceId, sandboxId);
+      if (sandboxId && config.backend === "vercel") state.workspaceToSandbox.set(workspaceId, sandboxId);
+      if (sandboxId && config.backend === "cloudflare") state.workspaceToCloudflare.set(workspaceId, sandboxId);
     } catch (err) {
       const code = (err as { code?: number }).code === 502 ? 502 : 500;
       return Response.json(

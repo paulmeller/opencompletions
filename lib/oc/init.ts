@@ -18,7 +18,9 @@ import { registerBackends } from "./queue";
 import { runClaudeLocal, runClaudeLocalStreaming, runAgentLocal } from "./backends/local";
 import { runClaudeOnSprite, runClaudeSpriteStreaming, runAgentOnSprite } from "./backends/sprite";
 import { runClaudeOnVercel, runClaudeVercelStreaming, runAgentOnVercel } from "./backends/vercel";
+import { runClaudeOnCloudflare, runCloudflareStreaming, runAgentOnCloudflare } from "./backends/cloudflare";
 import * as files from "./files";
+import { runLocalSetup } from "./setup";
 
 // ---------------------------------------------------------------------------
 // Singleton promise (survives Next.js HMR in dev via globalThis)
@@ -61,9 +63,12 @@ async function doInit(): Promise<void> {
     runSpriteStreaming: runClaudeSpriteStreaming,
     runOnVercel: runClaudeOnVercel,
     runVercelStreaming: runClaudeVercelStreaming,
+    runOnCloudflare: runClaudeOnCloudflare,
+    runCloudflareStreaming,
     runAgentLocal,
     runAgentOnSprite,
     runAgentOnVercel,
+    runAgentOnCloudflare,
   });
 
   // --- Sprite pool ---
@@ -77,6 +82,18 @@ async function doInit(): Promise<void> {
   // Here we just log readiness.
   if (config.vercelToken && config.vercelTeamId) {
     console.log("[oc/init] Vercel backend credentials present — sandboxes will be created on demand");
+  }
+
+  // --- Cloudflare pool ---
+  // Actual sandbox creation is deferred to the cloudflare backend module.
+  // Requires a Cloudflare Worker proxy wrapping the Sandbox SDK.
+  if (config.cloudflareAccountId && config.cloudflareApiToken) {
+    console.log("[oc/init] Cloudflare Sandbox credentials present — sandboxes will be created on demand");
+  }
+
+  // --- Run setup commands (local backend) ---
+  if (config.backend === "local") {
+    await runLocalSetup();
   }
 
   // --- Shutdown handlers (register only once) ---

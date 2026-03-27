@@ -38,6 +38,15 @@ export async function GET(request: Request) {
     };
   }
 
+  if (state.cloudflarePool.length > 0) {
+    available.push("cloudflare");
+    details.cloudflare = {
+      status: "ready",
+      pool_size: state.cloudflarePool.length,
+      busy: state.cloudflarePool.reduce((s, sb) => s + sb.busy, 0),
+    };
+  }
+
   return Response.json({
     default: config.backend,
     available,

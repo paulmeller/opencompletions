@@ -102,6 +102,11 @@ export function getConfig(): OcConfig {
     vercelProjectId: str("vercel_project_id", "VERCEL_PROJECT_ID", "", all),
     vercelSnapshotId: str("vercel_snapshot_id", "VERCEL_SNAPSHOT_ID", "", all),
 
+    // Cloudflare Sandbox
+    cloudflareAccountId: str("cloudflare_account_id", "CLOUDFLARE_ACCOUNT_ID", "", all),
+    cloudflareApiToken: str("cloudflare_api_token", "CLOUDFLARE_API_TOKEN", "", all),
+    cloudflareApiUrl: str("cloudflare_api_url", "CLOUDFLARE_API_URL", "", all),
+
     // LLM credentials
     anthropicApiKey: str("llm_key_claude_api", "ANTHROPIC_API_KEY", "", all),
     claudeToken: str("llm_key_claude_oauth", "CLAUDE_CODE_OAUTH_TOKEN", "", all),
@@ -112,6 +117,9 @@ export function getConfig(): OcConfig {
     maxFileSize: num("max_file_size", "MAX_FILE_SIZE", 50 * 1024 * 1024, all),
     maxWorkspaceSize: num("max_workspace_size", "MAX_WORKSPACE_SIZE", 200 * 1024 * 1024, all),
     workspaceTtl: num("workspace_ttl", "WORKSPACE_TTL_MS", 3_600_000, all),
+
+    // Setup commands (run once per backend instance)
+    setupCommands: strList("setup_commands", "SETUP_COMMANDS", all),
   };
 
   globalForConfig.__ocCachedConfig = config;

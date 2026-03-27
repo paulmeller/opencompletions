@@ -32,7 +32,7 @@ interface Workspace {
   lastAccessedAt: number;
   uploadedFiles: Map<string, FileInfo>;
   totalBytes: number;
-  backend: "local" | "sprite" | "vercel";
+  backend: "local" | "sprite" | "vercel" | "cloudflare";
   localDir?: string;
   spriteName?: string;
   sandboxId?: string;
@@ -72,7 +72,7 @@ const workspaces = globalForFiles.__ocWorkspaces;
  * For sprite/vercel, also binds to a specific instance.
  */
 export async function createWorkspace(
-  backend: "local" | "sprite" | "vercel",
+  backend: "local" | "sprite" | "vercel" | "cloudflare",
   spriteName?: string,
   sandboxId?: string,
 ): Promise<{ id: string }> {
@@ -103,6 +103,11 @@ export async function createWorkspace(
     ws.remotePath = `ws-${id}`;
     // Create directory on sandbox
     await vercelMkdir(sandboxId!, ws.remotePath);
+  } else if (backend === "cloudflare") {
+    ws.sandboxId = sandboxId;
+    ws.remotePath = `/workspace/ws-${id}`;
+    // Create directory on sandbox via exec
+    await cloudfareMkdir(sandboxId!, ws.remotePath);
   }
 
   workspaces.set(id, ws);
@@ -140,6 +145,12 @@ export async function saveFile(
     // Use tarball upload for Vercel
     const tar = createTarGz([{ name: filename, buffer }]);
     await vercelWriteTar(ws.sandboxId!, ws.remotePath!, tar);
+  } else if (ws.backend === "cloudflare") {
+    await cloudflareWriteFile(
+      ws.sandboxId!,
+      `${ws.remotePath}/${filename}`,
+      buffer,
+    );
   }
 
   return { name: filename, size: buffer.length };
@@ -188,6 +199,16 @@ export async function listFiles(workspaceId: string): Promise<FileEntry[]> {
         type: isUploaded ? "input" : "output",
       });
     }
+  } else if (ws.backend === "cloudflare") {
+    const listing = await cloudflareListDir(ws.sandboxId!, ws.remotePath!);
+    for (const entry of listing) {
+      const isUploaded = ws.uploadedFiles.has(entry.name);
+      fileList.push({
+        name: entry.name,
+        size: entry.size || 0,
+        type: isUploaded ? "input" : "output",
+      });
+    }
   }
 
   return fileList;
@@ -214,6 +235,8 @@ export async function readFile(
     return spriteReadFile(ws.spriteName!, `${ws.remotePath}/${filename}`);
   } else if (ws.backend === "vercel") {
     return vercelReadFile(ws.sandboxId!, ws.remotePath!, filename);
+  } else if (ws.backend === "cloudflare") {
+    return cloudflareReadFile(ws.sandboxId!, ws.remotePath!, filename);
   }
 
   throw Object.assign(new Error("Unknown backend"), { code: 500 });
@@ -236,6 +259,8 @@ export async function deleteWorkspace(workspaceId: string): Promise<void> {
     spriteDeleteDir(ws.spriteName!, ws.remotePath!).catch(() => {});
   } else if (ws.backend === "vercel") {
     vercelDeleteDir(ws.sandboxId!, ws.remotePath!).catch(() => {});
+  } else if (ws.backend === "cloudflare") {
+    cloudflareDeleteDir(ws.sandboxId!, ws.remotePath!).catch(() => {});
   }
 }
 
@@ -786,6 +811,175 @@ async function vercelWorkspaceExists(
 }
 
 // ---------------------------------------------------------------------------
+// Cloudflare Sandbox backend helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Cloudflare Sandbox file operations.
+ *
+ * These use a REST API proxy that wraps the Cloudflare Sandbox SDK.
+ * The proxy endpoint is configured via cloudflareApiUrl in config.
+ *
+ * TODO: Update when Cloudflare provides a public REST API for Sandbox.
+ * The SDK equivalents are:
+ *   await sandbox.writeFile(path, content)
+ *   const content = await sandbox.readFile(path)
+ *   await sandbox.mkdir(path, { recursive: true })
+ *   const exists = await sandbox.exists(path)
+ *   await sandbox.deleteFile(path)
+ */
+
+function cloudflareApiUrl(): string {
+  const config = getConfig();
+  return config.cloudflareApiUrl || `https://api.cloudflare.com/client/v4/accounts/${config.cloudflareAccountId}`;
+}
+
+function cloudflareHdrs(): Record<string, string> {
+  const config = getConfig();
+  return {
+    Authorization: `Bearer ${config.cloudflareApiToken}`,
+    "Content-Type": "application/json",
+  };
+}
+
+async function cloudfareMkdir(sandboxId: string, dirPath: string): Promise<void> {
+  const res = await fetch(`${cloudflareApiUrl()}/sandboxes/${sandboxId}/files/mkdir`, {
+    method: "POST",
+    headers: cloudflareHdrs(),
+    body: JSON.stringify({ path: dirPath, recursive: true }),
+  });
+
+  if (!res.ok) {
+    throw Object.assign(
+      new Error(`Cloudflare mkdir failed (${res.status}): ${await res.text()}`),
+      { code: 502 },
+    );
+  }
+}
+
+async function cloudflareWriteFile(
+  sandboxId: string,
+  remotePath: string,
+  buffer: Buffer,
+): Promise<void> {
+  const config = getConfig();
+  const res = await fetch(`${cloudflareApiUrl()}/sandboxes/${sandboxId}/files/write`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.cloudflareApiToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      path: remotePath,
+      content: buffer.toString("base64"),
+      encoding: "base64",
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw Object.assign(
+      new Error(`Cloudflare file write failed (${res.status}): ${text}`),
+      { code: 502 },
+    );
+  }
+}
+
+async function cloudflareReadFile(
+  sandboxId: string,
+  dirPath: string,
+  filename: string,
+): Promise<Readable> {
+  const config = getConfig();
+  const filePath = `${dirPath}/${filename}`;
+  const res = await fetch(`${cloudflareApiUrl()}/sandboxes/${sandboxId}/files/read`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.cloudflareApiToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ path: filePath }),
+  });
+
+  if (!res.ok) {
+    if (res.status === 404) {
+      throw Object.assign(new Error("File not found"), { code: 404 });
+    }
+    throw Object.assign(
+      new Error(`Cloudflare file read failed (${res.status})`),
+      { code: 502 },
+    );
+  }
+
+  return Readable.fromWeb(res.body as import("stream/web").ReadableStream);
+}
+
+async function cloudflareListDir(
+  sandboxId: string,
+  dirPath: string,
+): Promise<DirEntry[]> {
+  const config = getConfig();
+  // Use exec to list files (same pattern as Vercel)
+  const res = await fetch(`${cloudflareApiUrl()}/sandboxes/${sandboxId}/exec`, {
+    method: "POST",
+    headers: cloudflareHdrs(),
+    body: JSON.stringify({
+      command: "find",
+      args: [dirPath, "-maxdepth", "1", "-type", "f", "-printf", "%s %f\\n"],
+      env: {},
+    }),
+  });
+
+  if (!res.ok) return [];
+  const data = await res.json() as { stdout?: string };
+  const stdout = data.stdout || "";
+
+  const entries: DirEntry[] = [];
+  for (const line of stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const spaceIdx = trimmed.indexOf(" ");
+    if (spaceIdx === -1) continue;
+    const size = parseInt(trimmed.slice(0, spaceIdx), 10);
+    const name = trimmed.slice(spaceIdx + 1);
+    if (name && !isNaN(size)) {
+      entries.push({ name, size });
+    }
+  }
+  return entries;
+}
+
+async function cloudflareDeleteDir(
+  sandboxId: string,
+  dirPath: string,
+): Promise<void> {
+  await fetch(`${cloudflareApiUrl()}/sandboxes/${sandboxId}/exec`, {
+    method: "POST",
+    headers: cloudflareHdrs(),
+    body: JSON.stringify({
+      command: "rm",
+      args: ["-rf", dirPath],
+      env: {},
+    }),
+  }).catch(() => {});
+}
+
+async function cloudflareWorkspaceExists(
+  sandboxId: string,
+  dirPath: string,
+): Promise<boolean> {
+  const res = await fetch(`${cloudflareApiUrl()}/sandboxes/${sandboxId}/files/exists`, {
+    method: "POST",
+    headers: cloudflareHdrs(),
+    body: JSON.stringify({ path: dirPath }),
+  });
+
+  if (!res.ok) return false;
+  const data = await res.json() as { exists?: boolean };
+  return data.exists === true;
+}
+
+// ---------------------------------------------------------------------------
 // Pre-run validation
 // ---------------------------------------------------------------------------
 
@@ -802,6 +996,8 @@ export async function validateWorkspaceExists(workspaceId: string): Promise<bool
     return spriteWorkspaceExists(ws.spriteName!, ws.remotePath!);
   } else if (ws.backend === "vercel") {
     return vercelWorkspaceExists(ws.sandboxId!, ws.remotePath!);
+  } else if (ws.backend === "cloudflare") {
+    return cloudflareWorkspaceExists(ws.sandboxId!, ws.remotePath!);
   }
   return false;
 }

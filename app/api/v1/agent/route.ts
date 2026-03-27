@@ -47,6 +47,7 @@ export async function POST(request: Request) {
   const availableBackends = new Set<string>(["local"]);
   if (state.spritePool.length > 0) availableBackends.add("sprite");
   if (state.vercelPool.length > 0) availableBackends.add("vercel");
+  if (state.cloudflarePool.length > 0) availableBackends.add("cloudflare");
 
   if (!availableBackends.has(requestBackend)) {
     return Response.json(
@@ -134,6 +135,15 @@ export async function POST(request: Request) {
         if (wsSandbox && sessSandbox && wsSandbox !== sessSandbox) {
           return Response.json(
             { error: { message: "workspace_id and session_id are bound to different sandboxes", type: "conflict" } },
+            { status: 409 },
+          );
+        }
+      } else if (requestBackend === "cloudflare") {
+        const wsSandbox = state.workspaceToCloudflare.get(wsId);
+        const sessSandbox = state.sessionToCloudflare.get(body.session_id as string);
+        if (wsSandbox && sessSandbox && wsSandbox !== sessSandbox) {
+          return Response.json(
+            { error: { message: "workspace_id and session_id are bound to different Cloudflare sandboxes", type: "conflict" } },
             { status: 409 },
           );
         }

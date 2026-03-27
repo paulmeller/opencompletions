@@ -20,6 +20,7 @@ import {
 } from "../helpers";
 import { getCliProvider } from "../cli-providers";
 import type { AgentOpts, AgentEvent, SpriteEntry } from "../types";
+import { runSpriteSetup } from "../setup";
 
 // ---------------------------------------------------------------------------
 // Control chars regex (for stripping sprite framing bytes)
@@ -102,6 +103,10 @@ export async function initSprites(): Promise<void> {
   await Promise.all(spriteNames.map((name) => cleanupSpriteAuth(name)));
   console.log("Initializing sprites...");
   await Promise.all(spriteNames.map((name) => initSpriteSetup(name)));
+
+  // Run setup commands (e.g. plugin installs) on each sprite
+  await Promise.all(spriteNames.map((name) => runSpriteSetup(name)));
+
   console.log("Sprites ready.");
 }
 
