@@ -163,7 +163,7 @@ function RunSetupButton() {
     try {
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (userKey) headers["Authorization"] = `Bearer ${userKey}`;
-      const res = await fetch("/api/v1/setup", { method: "POST", headers });
+      const res = await fetch("/api/v1/setup", { method: "POST", headers, body: JSON.stringify({ force: true }) });
       const data = await res.json();
       if (!res.ok) {
         setResult(`Error: ${data.error?.message || res.status}`);

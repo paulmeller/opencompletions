@@ -41,6 +41,10 @@ const SETTING_FIELDS: Record<string, { key: string; type: "text" | "secret" }> =
   setup_commands: { key: "setup_commands", type: "text" },
 };
 
+// Fields that can only be modified by dashboard users (WorkOS session),
+// not via external API keys. These execute arbitrary commands on backends.
+const ADMIN_ONLY_FIELDS = ["setup_commands"];
+
 export async function PUT(request: Request) {
   const auth = await requireAuth(request);
   if (!auth.ok) return auth.response;
@@ -50,6 +54,27 @@ export async function PUT(request: Request) {
     body = await request.json();
   } catch {
     return Response.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  // Guard admin-only fields: require WorkOS session (not just API key)
+  for (const field of ADMIN_ONLY_FIELDS) {
+    if (body[field] !== undefined) {
+      try {
+        const { withAuth } = await import("@workos-inc/authkit-nextjs");
+        const { user } = await withAuth();
+        if (!user) {
+          return Response.json(
+            { error: "Setup commands can only be modified by dashboard users" },
+            { status: 403 },
+          );
+        }
+      } catch {
+        return Response.json(
+          { error: "Setup commands can only be modified by dashboard users" },
+          { status: 403 },
+        );
+      }
+    }
   }
 
   for (const [field, { key, type }] of Object.entries(SETTING_FIELDS)) {

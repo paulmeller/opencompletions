@@ -12,18 +12,40 @@ export async function POST(request: Request) {
   const auth = await authorize(request);
   if (!auth.ok) return auth.response;
 
+  // Admin permission gate: require a WorkOS dashboard session.
+  // Placeholder until proper roles system exists — for now, only
+  // browser-authenticated dashboard users may trigger setup commands.
+  try {
+    const { withAuth } = await import("@workos-inc/authkit-nextjs");
+    const { user } = await withAuth();
+    if (!user) {
+      return Response.json(
+        { error: { message: "Setup commands can only be run by dashboard users", type: "forbidden", code: 403 } },
+        { status: 403 },
+      );
+    }
+  } catch {
+    return Response.json(
+      { error: { message: "Setup commands can only be run by dashboard users", type: "forbidden", code: 403 } },
+      { status: 403 },
+    );
+  }
+
   const config = getConfig();
 
   if (config.setupCommands.length === 0) {
     return Response.json({ message: "No setup commands configured" });
   }
 
+  const body = await request.json().catch(() => ({}));
+  const force = body.force === true;
+
   const results: Array<{ backend: string; name?: string; status: string }> = [];
 
   // Run on local
   try {
-    await runLocalSetup();
-    results.push({ backend: "local", status: "ok" });
+    const success = await runLocalSetup(force);
+    results.push({ backend: "local", status: success ? "ok" : "partial_failure" });
   } catch (err) {
     results.push({ backend: "local", status: `error: ${(err as Error).message}` });
   }
@@ -32,8 +54,8 @@ export async function POST(request: Request) {
   const state = getState();
   for (const sprite of state.spritePool) {
     try {
-      await runSpriteSetup(sprite.name);
-      results.push({ backend: "sprite", name: sprite.name, status: "ok" });
+      const success = await runSpriteSetup(sprite.name, force);
+      results.push({ backend: "sprite", name: sprite.name, status: success ? "ok" : "partial_failure" });
     } catch (err) {
       results.push({ backend: "sprite", name: sprite.name, status: `error: ${(err as Error).message}` });
     }

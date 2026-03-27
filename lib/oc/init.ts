@@ -75,10 +75,8 @@ async function doInit(): Promise<void> {
   if (config.spriteNames.length > 0 && config.spriteToken) {
     state.spritePool = config.spriteNames.map((name) => ({ name, busy: 0 }));
     console.log(`[oc/init] Sprite pool initialized: ${config.spriteNames.join(", ")}`);
-    // Run setup commands on each sprite
-    for (const name of config.spriteNames) {
-      await runSpriteSetup(name);
-    }
+    // Run setup commands on all sprites in parallel
+    await Promise.all(config.spriteNames.map((name) => runSpriteSetup(name)));
   }
 
   // --- Vercel pool ---
