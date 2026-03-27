@@ -11,6 +11,7 @@ interface ImportItem {
   resources?: Record<string, string>;
   name?: string;
   upsert?: boolean;
+  auto_apply?: boolean;
 }
 
 interface ImportResult {
@@ -40,6 +41,9 @@ function processItem(item: ImportItem): ImportResult {
     ? Object.entries(item.resources).map(([file_name, content]) => ({ file_name, content }))
     : [];
 
+  // auto_apply: explicit item field takes precedence, then parsed frontmatter
+  const autoApply = item.auto_apply !== undefined ? item.auto_apply : parsed.autoApply;
+
   const input = {
     name: slug,
     display_name: parsed.displayName || slug,
@@ -47,6 +51,7 @@ function processItem(item: ImportItem): ImportResult {
     instructions: parsed.instructions,
     tags: parsed.tags,
     resources,
+    auto_apply: autoApply,
   };
 
   const existing = getSkill(slug);

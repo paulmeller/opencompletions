@@ -23,7 +23,7 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { name, display_name, description, instructions, tags, resources } = body;
+  const { name, display_name, description, instructions, tags, resources, auto_apply } = body;
 
   if (!name || typeof name !== "string") {
     return Response.json({ error: "name is required" }, { status: 400 });
@@ -43,6 +43,7 @@ export async function POST(request: Request) {
       instructions,
       tags,
       resources,
+      auto_apply,
     });
     return Response.json(skill, { status: 201 });
   } catch (err) {

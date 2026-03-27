@@ -23,6 +23,8 @@ export interface ParsedSkillMd {
   description: string | null;
   /** Tags array from frontmatter */
   tags: string[];
+  /** Whether this skill should be auto-applied to all requests */
+  autoApply: boolean;
   /** Markdown body after frontmatter (the instructions) */
   instructions: string;
 }
@@ -94,6 +96,7 @@ export function parseSkillMd(raw: string): ParsedSkillMd {
   const displayName = typeof fm.name === "string" ? fm.name : null;
   const description = typeof fm.description === "string" ? fm.description : null;
   const tags = Array.isArray(fm.tags) ? fm.tags : [];
+  const autoApply = fm.auto_apply === "true";
 
   // Slug: explicit slug field, or slugify the name
   let slug: string | null = null;
@@ -103,5 +106,5 @@ export function parseSkillMd(raw: string): ParsedSkillMd {
     slug = slugify(displayName);
   }
 
-  return { displayName, slug, description, tags, instructions };
+  return { displayName, slug, description, tags, autoApply, instructions };
 }

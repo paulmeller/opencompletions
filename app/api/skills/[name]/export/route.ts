@@ -21,14 +21,18 @@ export async function GET(
   }
 
   // Reconstruct SKILL.md format
-  const frontmatter = [
+  const frontmatterLines = [
     "---",
     `name: ${skill.display_name}`,
     `slug: ${skill.name}`,
     `description: ${skill.description}`,
     `tags: [${(JSON.parse(skill.tags || "[]") as string[]).join(", ")}]`,
-    "---",
-  ].join("\n");
+  ];
+  if (skill.auto_apply) {
+    frontmatterLines.push("auto_apply: true");
+  }
+  frontmatterLines.push("---");
+  const frontmatter = frontmatterLines.join("\n");
 
   const skillMd = `${frontmatter}\n\n${skill.instructions || ""}`.trim();
 

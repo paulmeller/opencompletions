@@ -5,7 +5,7 @@
  * prompt injection and filtered MCP server config.
  */
 
-import { getSkill, listSkillsByTags } from "@/lib/db";
+import { getSkill, listSkillsByTags, listAutoApplySkills } from "@/lib/db";
 import type { AgentOpts } from "./types";
 
 export interface SkillFilter {
@@ -36,6 +36,25 @@ export function resolveSkills(
   skillFilter?: SkillFilter,
   preloadSkills?: PreloadSkill[],
 ): SkillLoadResult {
+  // Auto-apply skills: inject skills with auto_apply=true
+  // Skip if skill_filter has explicit empty names (opt-out)
+  const skipAutoApply = skillFilter?.names !== undefined && skillFilter.names.length === 0 && !skillFilter.tags?.length;
+
+  let autoApplyContent = "";
+  const autoApplyNames = new Set<string>();
+
+  if (!skipAutoApply) {
+    const autoSkills = listAutoApplySkills();
+    for (const skill of autoSkills) {
+      let section = `## Skill: ${skill.display_name}\n\n${skill.instructions || ""}`;
+      for (const r of skill.resources || []) {
+        section += `\n\n### Reference: ${r.file_name}\n\n${r.content}`;
+      }
+      autoApplyContent += (autoApplyContent ? "\n\n---\n\n" : "") + section;
+      autoApplyNames.add(skill.name);
+    }
+  }
+
   // Resolve skill filter to concrete names
   let filterNames: string[] | null = null;
   if (skillFilter) {
@@ -57,6 +76,11 @@ export function resolveSkills(
       let section = "";
 
       if (item.name) {
+        // Skip if already injected via auto-apply
+        if (autoApplyNames.has(item.name)) {
+          preloadedNames.add(item.name);
+          continue;
+        }
         const skill = getSkill(item.name);
         if (!skill) continue;
         preloadedNames.add(item.name);
@@ -81,9 +105,10 @@ export function resolveSkills(
     }
   }
 
-  // Deduplicate: remove preloaded skills from MCP filter
-  if (filterNames && preloadedNames.size > 0) {
-    filterNames = filterNames.filter((n) => !preloadedNames.has(n));
+  // Deduplicate: remove preloaded and auto-apply skills from MCP filter
+  const allInjectedNames = new Set([...preloadedNames, ...autoApplyNames]);
+  if (filterNames && allInjectedNames.size > 0) {
+    filterNames = filterNames.filter((n) => !allInjectedNames.has(n));
   }
 
   // Build MCP config
@@ -112,5 +137,6 @@ export function resolveSkills(
     };
   }
 
-  return { systemPromptPrefix: preloadContent, mcpServers };
+  const combinedPrefix = [autoApplyContent, preloadContent].filter(Boolean).join("\n\n---\n\n");
+  return { systemPromptPrefix: combinedPrefix, mcpServers };
 }

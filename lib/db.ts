@@ -9,6 +9,7 @@ export interface SkillRow {
   description: string;
   instructions: string;
   tags: string; // JSON array string e.g. '["legal","contracts"]'
+  auto_apply: number; // 0 or 1
   created_at: string;
   updated_at: string;
 }
@@ -29,6 +30,7 @@ export interface SkillInput {
   instructions?: string;
   tags?: string[];
   resources?: SkillResource[];
+  auto_apply?: boolean;
 }
 
 let db: Database.Database | null = null;
@@ -151,6 +153,13 @@ function migrate(db: Database.Database) {
       PRAGMA user_version = 5;
     `);
   }
+
+  if (version < 6) {
+    db.exec(`
+      ALTER TABLE skills ADD COLUMN auto_apply INTEGER NOT NULL DEFAULT 0;
+      PRAGMA user_version = 6;
+    `);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +272,20 @@ export function listSkills(): SkillFull[] {
   }));
 }
 
+export function listAutoApplySkills(): SkillFull[] {
+  const db = getDb();
+  const skills = db.prepare(
+    "SELECT * FROM skills WHERE auto_apply = 1 ORDER BY name"
+  ).all() as SkillRow[];
+  const resourceStmt = db.prepare(
+    "SELECT file_name, content FROM skill_resources WHERE skill_id = ?"
+  );
+  return skills.map((skill) => ({
+    ...skill,
+    resources: resourceStmt.all(skill.id) as SkillResource[],
+  }));
+}
+
 export function getSkill(name: string): SkillFull | null {
   const db = getDb();
   const skill = db
@@ -338,15 +361,16 @@ export const createSkill = (() => {
       fn = db.transaction((input: SkillInput) => {
         const result = db
           .prepare(
-            `INSERT INTO skills (name, display_name, description, instructions, tags)
-             VALUES (?, ?, ?, ?, ?)`
+            `INSERT INTO skills (name, display_name, description, instructions, tags, auto_apply)
+             VALUES (?, ?, ?, ?, ?, ?)`
           )
           .run(
             input.name,
             input.display_name || "",
             input.description || "",
             input.instructions || "",
-            JSON.stringify(input.tags || [])
+            JSON.stringify(input.tags || []),
+            input.auto_apply ? 1 : 0
           );
 
         const skillId = result.lastInsertRowid as number;
@@ -384,13 +408,14 @@ export const updateSkill = (() => {
         db.prepare(
           `UPDATE skills
            SET display_name = ?, description = ?, instructions = ?, tags = ?,
-               updated_at = datetime('now')
+               auto_apply = ?, updated_at = datetime('now')
            WHERE id = ?`
         ).run(
           input.display_name ?? "",
           input.description ?? "",
           input.instructions ?? "",
           input.tags ? JSON.stringify(input.tags) : "[]",
+          input.auto_apply ? 1 : 0,
           existing.id
         );
 

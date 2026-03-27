@@ -32,7 +32,7 @@ export async function PUT(
     return Response.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { display_name, description, instructions, tags, resources } = body;
+  const { display_name, description, instructions, tags, resources, auto_apply } = body;
 
   const updated = updateSkill(name, {
     display_name,
@@ -40,6 +40,7 @@ export async function PUT(
     instructions,
     tags,
     resources,
+    auto_apply,
   });
 
   if (!updated) {
