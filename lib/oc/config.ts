@@ -54,7 +54,8 @@ function strList(dbKey: string, envKey: string, all?: Record<string, string>): s
       if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
     } catch { /* fall through */ }
   }
-  return raw.split(",").map((s) => s.trim()).filter(Boolean);
+  // Split on newlines or commas
+  return raw.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
 }
 
 // ---------------------------------------------------------------------------

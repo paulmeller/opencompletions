@@ -3,10 +3,12 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Field, FieldLabel, FieldDescription } from "@/components/ui/field";
-import { Save } from "lucide-react";
+import { Save, Play } from "lucide-react";
+import { useApiKey } from "@/lib/api-key-context";
 
 interface SettingRow {
   key: string;
@@ -126,18 +128,68 @@ export function ServerConfigCard() {
 
         <Field>
           <FieldLabel>Setup Commands</FieldLabel>
-          <Input value={setupCommands} onChange={(e) => setSetupCommands(e.target.value)}
-            placeholder="command1, command2 (comma-separated, run once per backend instance)" />
+          <Textarea
+            value={setupCommands}
+            onChange={(e) => setSetupCommands(e.target.value)}
+            placeholder={"claude plugin install @anthropic-ai/mcp-server-fetch\nclaude plugin install @anthropic-ai/mcp-server-github"}
+            rows={4}
+            className="font-mono text-sm"
+          />
           <FieldDescription>
-            {savedSetupCommands ? `Current: ${savedSetupCommands}` : "Shell commands to run on init (e.g. claude plugin install ...)"}
+            One command per line. Runs once per backend instance on startup (idempotent via sentinel hash).
           </FieldDescription>
         </Field>
 
-        <Button onClick={handleSave} disabled={saving}>
-          <Save data-icon="inline-start" />
-          {saving ? "Saving..." : "Save Server Config"}
-        </Button>
+        <div className="flex gap-2">
+          <Button onClick={handleSave} disabled={saving}>
+            <Save data-icon="inline-start" />
+            {saving ? "Saving..." : "Save Server Config"}
+          </Button>
+          <RunSetupButton />
+        </div>
       </CardContent>
     </Card>
+  );
+}
+
+function RunSetupButton() {
+  const userKey = useApiKey();
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+
+  async function handleRun() {
+    setRunning(true);
+    setResult(null);
+    try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (userKey) headers["Authorization"] = `Bearer ${userKey}`;
+      const res = await fetch("/api/v1/setup", { method: "POST", headers });
+      const data = await res.json();
+      if (!res.ok) {
+        setResult(`Error: ${data.error?.message || res.status}`);
+      } else if (data.message) {
+        setResult(data.message);
+      } else {
+        const summary = (data.results || [])
+          .map((r: { backend: string; name?: string; status: string }) =>
+            `${r.backend}${r.name ? ` (${r.name})` : ""}: ${r.status}`)
+          .join("\n");
+        setResult(summary || "Done");
+      }
+    } catch (err) {
+      setResult(`Error: ${(err as Error).message}`);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <Button variant="secondary" onClick={handleRun} disabled={running}>
+        <Play data-icon="inline-start" />
+        {running ? "Running..." : "Run Setup Now"}
+      </Button>
+      {result && <p className="text-xs text-muted-foreground whitespace-pre-wrap">{result}</p>}
+    </div>
   );
 }

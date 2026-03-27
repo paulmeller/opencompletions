@@ -20,7 +20,7 @@ import { runClaudeOnSprite, runClaudeSpriteStreaming, runAgentOnSprite } from ".
 import { runClaudeOnVercel, runClaudeVercelStreaming, runAgentOnVercel } from "./backends/vercel";
 import { runClaudeOnCloudflare, runCloudflareStreaming, runAgentOnCloudflare } from "./backends/cloudflare";
 import * as files from "./files";
-import { runLocalSetup } from "./setup";
+import { runLocalSetup, runSpriteSetup } from "./setup";
 
 // ---------------------------------------------------------------------------
 // Singleton promise (survives Next.js HMR in dev via globalThis)
@@ -75,6 +75,10 @@ async function doInit(): Promise<void> {
   if (config.spriteNames.length > 0 && config.spriteToken) {
     state.spritePool = config.spriteNames.map((name) => ({ name, busy: 0 }));
     console.log(`[oc/init] Sprite pool initialized: ${config.spriteNames.join(", ")}`);
+    // Run setup commands on each sprite
+    for (const name of config.spriteNames) {
+      await runSpriteSetup(name);
+    }
   }
 
   // --- Vercel pool ---
