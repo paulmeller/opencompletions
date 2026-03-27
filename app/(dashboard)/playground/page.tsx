@@ -112,7 +112,7 @@ export default function PlaygroundPage() {
 
   // Load backends, history, and check for API key on mount
   useEffect(() => {
-    fetch("/api/backends").then((r) => r.json()).then((d) => {
+    fetch("/api/v1/backends").then((r) => r.json()).then((d) => {
       if (d.available?.length) {
         setBackends(d.available);
         setSelectedBackend(d.default || d.available[0]);
