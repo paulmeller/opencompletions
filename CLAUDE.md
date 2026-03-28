@@ -140,7 +140,7 @@ Single SQLite file with 5 tables:
 
 - `settings` — encrypted key-value config
 - `skills` / `skill_resources` — MCP skills with reference files
-- `agent_runs` — execution history
+- `agent_runs` — execution history (full event transcripts stored in events_json, 1MB cap)
 - `user_keys` — per-user API keys (encrypted)
 
 ## Testing
@@ -160,7 +160,7 @@ curl -H "Authorization: Bearer $KEY" http://localhost:3000/api/v1/backends
 
 ## Key Directories
 
-- `app/(dashboard)/` — Dashboard pages (playground, runs, keys, settings, skills)
+- `app/(dashboard)/` — Dashboard pages (playground, runs + run detail, keys, settings, skills)
 - `app/api/v1/` — External API routes
 - `app/api/` — Dashboard management routes (keys, settings, skills, mcp)
 - `lib/oc/` — Engine modules (config, state, queue, backends, streaming, etc.)
