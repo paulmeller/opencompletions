@@ -1,4 +1,4 @@
-import Database from "better-sqlite3";
+import Database from "libsql";
 import path from "path";
 import { createCipheriv, createDecipheriv, randomBytes } from "crypto";
 
@@ -33,28 +33,61 @@ export interface SkillInput {
   auto_apply?: boolean;
 }
 
-let db: Database.Database | null = null;
+let db: InstanceType<typeof Database> | null = null;
 
-function getDb(): Database.Database {
+function getDb(): InstanceType<typeof Database> {
   if (db) return db;
 
-  const dbPath =
-    process.env.SKILLS_DB_PATH ||
-    path.join(process.cwd(), "data", "skills.db");
+  const tursoUrl = process.env.TURSO_DATABASE_URL;
+  const tursoToken = process.env.TURSO_AUTH_TOKEN;
 
-  // Ensure data directory exists
-  const dir = path.dirname(dbPath);
-  const fs = require("fs");
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+  if (tursoUrl) {
+    // Turso embedded replica: local file synced to cloud
+    const localPath = process.env.SKILLS_DB_PATH ||
+      path.join(process.cwd(), "data", "local.db");
+    const dir = path.dirname(localPath);
+    const fs = require("fs");
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    db = new (Database as any)(localPath, {
+      syncUrl: tursoUrl,
+      authToken: tursoToken,
+    });
+    (db as any).sync();
+    console.log(`[db] Opened embedded replica: ${localPath} → ${tursoUrl}`);
+  } else {
+    // Local-only SQLite (dev mode)
+    const dbPath = process.env.SKILLS_DB_PATH ||
+      path.join(process.cwd(), "data", "skills.db");
+    const dir = path.dirname(dbPath);
+    const fs = require("fs");
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    db = new Database(dbPath);
+    console.log(`[db] Opened local SQLite: ${dbPath}`);
   }
 
-  db = new Database(dbPath);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
+  db!.pragma("journal_mode = WAL");
+  db!.pragma("foreign_keys = ON");
 
-  migrate(db);
-  return db;
+  migrate(db as any);
+  return db!;
+}
+
+/** Sync embedded replica to Turso cloud. No-op for local-only. */
+export function syncDb(): void {
+  if (!db) return;
+  try {
+    (db as any).sync?.();
+  } catch {}
+}
+
+// Periodic sync every 30 seconds (if using Turso)
+if (typeof setInterval !== "undefined") {
+  const syncInterval = setInterval(() => syncDb(), 30_000);
+  if (syncInterval.unref) syncInterval.unref();
 }
 
 function migrate(db: Database.Database) {
