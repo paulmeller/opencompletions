@@ -1586,6 +1586,13 @@
             "type": ["integer", "null"],
             "description": "Per-request timeout in milliseconds (default: 600000 = 10 min)"
           },
+          "response_format": {
+            "oneOf": [
+              { "type": "string", "enum": ["json", "text"] },
+              { "type": "object", "properties": { "type": { "type": "string", "enum": ["json_object", "text"] } } }
+            ],
+            "description": "Response format. Use 'json' or {type: 'json_object'} to force JSON output. Injects JSON instruction into system prompt and post-processes with robust JSON extractor."
+          },
           "skill_filter": {
             "type": "object",
             "properties": {
