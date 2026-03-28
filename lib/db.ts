@@ -73,6 +73,12 @@ function getDb(): InstanceType<typeof Database> {
   db!.pragma("foreign_keys = ON");
 
   migrate(db as any);
+
+  // Sync migrations to Turso cloud
+  if (tursoUrl) {
+    try { (db as any).sync(); } catch {}
+  }
+
   return db!;
 }
 
