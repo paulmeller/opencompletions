@@ -97,108 +97,79 @@ if (typeof setInterval !== "undefined") {
 }
 
 function migrate(db: Database.Database) {
-  const version = db.pragma("user_version", { simple: true }) as number;
+  // Use CREATE TABLE IF NOT EXISTS for all tables — idempotent, works with Turso.
+  // No PRAGMA user_version (Turso doesn't allow it remotely).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS skills (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE NOT NULL,
+      display_name TEXT NOT NULL DEFAULT '',
+      description TEXT NOT NULL DEFAULT '',
+      instructions TEXT NOT NULL DEFAULT '',
+      tags TEXT NOT NULL DEFAULT '[]',
+      auto_apply INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
 
-  if (version < 1) {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS skills (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT UNIQUE NOT NULL,
-        display_name TEXT NOT NULL DEFAULT '',
-        description TEXT NOT NULL DEFAULT '',
-        instructions TEXT NOT NULL DEFAULT '',
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
+    CREATE TABLE IF NOT EXISTS skill_resources (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      skill_id INTEGER NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+      file_name TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      UNIQUE(skill_id, file_name)
+    );
 
-      CREATE TABLE IF NOT EXISTS skill_resources (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        skill_id INTEGER NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
-        file_name TEXT NOT NULL,
-        content TEXT NOT NULL DEFAULT '',
-        UNIQUE(skill_id, file_name)
-      );
+    CREATE INDEX IF NOT EXISTS idx_skill_resources_skill_id
+      ON skill_resources(skill_id);
 
-      CREATE INDEX IF NOT EXISTS idx_skill_resources_skill_id
-        ON skill_resources(skill_id);
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'text',
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
 
-      PRAGMA user_version = 1;
-    `);
-  }
+    CREATE TABLE IF NOT EXISTS agent_runs (
+      id TEXT PRIMARY KEY,
+      api_key_id TEXT,
+      org_id TEXT,
+      session_id TEXT,
+      workspace_id TEXT,
+      prompt TEXT,
+      system_prompt TEXT,
+      backend TEXT,
+      status TEXT NOT NULL DEFAULT 'running',
+      num_turns INTEGER,
+      total_cost_usd REAL,
+      usage_json TEXT,
+      error_message TEXT,
+      cli TEXT,
+      model TEXT,
+      events_json TEXT,
+      started_at INTEGER NOT NULL,
+      completed_at INTEGER
+    );
 
-  if (version < 2) {
-    db.exec(`
-      ALTER TABLE skills ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';
-      PRAGMA user_version = 2;
-    `);
-  }
+    CREATE INDEX IF NOT EXISTS idx_runs_started ON agent_runs(started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_runs_key ON agent_runs(api_key_id);
+    CREATE INDEX IF NOT EXISTS idx_runs_status ON agent_runs(status);
 
-  if (version < 3) {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL,
-        type TEXT NOT NULL DEFAULT 'text',
-        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-      PRAGMA user_version = 3;
-    `);
-  }
+    CREATE TABLE IF NOT EXISTS user_keys (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workos_user_id TEXT NOT NULL,
+      workos_key_id TEXT NOT NULL,
+      key_value TEXT NOT NULL,
+      name TEXT NOT NULL DEFAULT 'Default',
+      is_default INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
 
-  if (version < 4) {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS agent_runs (
-        id TEXT PRIMARY KEY,
-        api_key_id TEXT,
-        org_id TEXT,
-        session_id TEXT,
-        workspace_id TEXT,
-        prompt TEXT,
-        system_prompt TEXT,
-        backend TEXT,
-        status TEXT NOT NULL DEFAULT 'running',
-        num_turns INTEGER,
-        total_cost_usd REAL,
-        usage_json TEXT,
-        error_message TEXT,
-        cli TEXT,
-        model TEXT,
-        events_json TEXT,
-        started_at INTEGER NOT NULL,
-        completed_at INTEGER
-      );
-      CREATE INDEX IF NOT EXISTS idx_runs_started ON agent_runs(started_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_runs_key ON agent_runs(api_key_id);
-      CREATE INDEX IF NOT EXISTS idx_runs_status ON agent_runs(status);
-      PRAGMA user_version = 4;
-    `);
-  }
-
-  if (version < 5) {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS user_keys (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        workos_user_id TEXT NOT NULL,
-        workos_key_id TEXT NOT NULL,
-        key_value TEXT NOT NULL,
-        name TEXT NOT NULL DEFAULT 'Default',
-        is_default INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_user_keys_user_default
-        ON user_keys(workos_user_id) WHERE is_default = 1;
-      CREATE INDEX IF NOT EXISTS idx_user_keys_user
-        ON user_keys(workos_user_id);
-      PRAGMA user_version = 5;
-    `);
-  }
-
-  if (version < 6) {
-    db.exec(`
-      ALTER TABLE skills ADD COLUMN auto_apply INTEGER NOT NULL DEFAULT 0;
-      PRAGMA user_version = 6;
-    `);
-  }
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_user_keys_user_default
+      ON user_keys(workos_user_id) WHERE is_default = 1;
+    CREATE INDEX IF NOT EXISTS idx_user_keys_user
+      ON user_keys(workos_user_id);
+  `);
 }
 
 // ---------------------------------------------------------------------------
