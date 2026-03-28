@@ -10,6 +10,7 @@ import {
   buildAnthropicResponse,
 } from "@/lib/oc/response-builders";
 import { normalizeResponseFormat } from "@/lib/oc/helpers";
+import { corsHeaders } from "@/lib/oc/cors";
 import { resolveSkills } from "@/lib/oc/skill-loader";
 import type { SkillFilter, PreloadSkill } from "@/lib/oc/skill-loader";
 import type { AgentOpts } from "@/lib/oc/types";
@@ -129,7 +130,12 @@ function streamAnthropicMessages(prompt: string, agentOpts: AgentOpts, model: st
   handler().catch(() => { try { writer.close(); } catch {} });
 
   return new Response(readable, {
-    headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" },
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+      ...corsHeaders(),
+    },
   });
 }
 

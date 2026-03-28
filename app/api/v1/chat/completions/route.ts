@@ -10,6 +10,7 @@ import {
   buildOpenAIResponse,
 } from "@/lib/oc/response-builders";
 import { normalizeResponseFormat } from "@/lib/oc/helpers";
+import { corsHeaders } from "@/lib/oc/cors";
 import { resolveSkills } from "@/lib/oc/skill-loader";
 import type { SkillFilter, PreloadSkill } from "@/lib/oc/skill-loader";
 import type { AgentOpts } from "@/lib/oc/types";
@@ -131,6 +132,7 @@ function streamOpenAIChat(prompt: string, agentOpts: AgentOpts, model: string): 
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       "Connection": "keep-alive",
+      ...corsHeaders(),
     },
   });
 }

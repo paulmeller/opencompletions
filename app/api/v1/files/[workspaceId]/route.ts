@@ -61,6 +61,7 @@ export async function DELETE(
   files.deleteWorkspace(workspaceId);
   state.workspaceToSprite.delete(workspaceId);
   state.workspaceToSandbox.delete(workspaceId);
+  state.workspaceToCloudflare.delete(workspaceId);
 
   return Response.json({ deleted: true, workspace_id: workspaceId });
 }

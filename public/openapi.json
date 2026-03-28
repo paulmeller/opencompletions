@@ -44,7 +44,7 @@
         "operationId": "listModels",
         "summary": "List available models",
         "tags": ["OpenAI-Compatible"],
-        "security": [{ "BearerAuth": [] }, { "ProviderKey": [] }],
+        "security": [],
         "responses": {
           "200": {
             "description": "Model list",
@@ -52,16 +52,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ModelListResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Invalid or missing API key",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -74,7 +64,7 @@
         "operationId": "getModel",
         "summary": "Get model details",
         "tags": ["OpenAI-Compatible"],
-        "security": [{ "BearerAuth": [] }, { "ProviderKey": [] }],
+        "security": [],
         "parameters": [
           {
             "name": "model_id",

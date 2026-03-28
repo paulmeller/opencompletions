@@ -1,24 +1,17 @@
 /**
- * SSE streaming handlers adapted for Next.js Web Streams API.
+ * Agent SSE streaming and buffered handlers for Next.js Web Streams API.
  *
- * Each handler returns a Response with a ReadableStream body.
- * Ported from server.js lines 2170-2485.
+ * Each streaming handler returns a Response with a ReadableStream body.
  */
 
-import { randomUUID } from "crypto";
-import { enqueue, enqueueAgent } from "./queue";
+import { enqueueAgent } from "./queue";
 import { applyJsonFormat } from "./helpers";
+import { corsHeaders } from "./cors";
 import type { AgentOpts } from "./types";
-
-const MODEL_NAME = "claude-code";
 
 // ---------------------------------------------------------------------------
 // SSE helpers (Web Streams)
 // ---------------------------------------------------------------------------
-
-function sseData(writer: WritableStreamDefaultWriter, encoder: TextEncoder, data: unknown) {
-  writer.write(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
-}
 
 function sseEvent(writer: WritableStreamDefaultWriter, encoder: TextEncoder, event: string, data: unknown) {
   writer.write(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
@@ -43,200 +36,8 @@ function createSSEResponse(
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       "Connection": "keep-alive",
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "*",
-      "Access-Control-Allow-Methods": "*",
+      ...corsHeaders(),
     },
-  });
-}
-
-// ---------------------------------------------------------------------------
-// OpenAI Chat Completions stream
-// ---------------------------------------------------------------------------
-
-export function handleOpenAIChatStream(
-  prompt: string,
-  systemPrompt: string | null,
-  model: string | null,
-  clientToken: string | null,
-): Response {
-  return createSSEResponse(async (writer, encoder) => {
-    const id = `chatcmpl-${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-    const created = Math.floor(Date.now() / 1000);
-    const m = model || MODEL_NAME;
-
-    // Initial role chunk
-    sseData(writer, encoder, {
-      id, object: "chat.completion.chunk", created, model: m,
-      choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }],
-    });
-
-    try {
-      await enqueue(prompt, systemPrompt ?? undefined, {
-        token: clientToken,
-        onChunk: (text: string) => {
-          sseData(writer, encoder, {
-            id, object: "chat.completion.chunk", created, model: m,
-            choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
-          });
-        },
-      });
-
-      sseData(writer, encoder, {
-        id, object: "chat.completion.chunk", created, model: m,
-        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-      });
-    } catch (err) {
-      sseData(writer, encoder, {
-        error: { message: (err as Error).message, type: "server_error" },
-      });
-    }
-
-    writer.write(encoder.encode("data: [DONE]\n\n"));
-  });
-}
-
-// ---------------------------------------------------------------------------
-// OpenAI Completions stream (legacy)
-// ---------------------------------------------------------------------------
-
-export function handleOpenAICompletionsStream(
-  prompt: string,
-  model: string | null,
-  clientToken: string | null,
-): Response {
-  return createSSEResponse(async (writer, encoder) => {
-    const id = `cmpl-${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-    const created = Math.floor(Date.now() / 1000);
-    const m = model || MODEL_NAME;
-
-    try {
-      await enqueue(prompt, undefined, {
-        token: clientToken,
-        onChunk: (text: string) => {
-          sseData(writer, encoder, {
-            id, object: "text_completion", created, model: m,
-            choices: [{ index: 0, text, finish_reason: null }],
-          });
-        },
-      });
-
-      sseData(writer, encoder, {
-        id, object: "text_completion", created, model: m,
-        choices: [{ index: 0, text: "", finish_reason: "stop" }],
-      });
-    } catch (err) {
-      sseData(writer, encoder, {
-        error: { message: (err as Error).message, type: "server_error" },
-      });
-    }
-
-    writer.write(encoder.encode("data: [DONE]\n\n"));
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Anthropic Messages stream
-// ---------------------------------------------------------------------------
-
-export function handleAnthropicStream(
-  prompt: string,
-  systemPrompt: string | null,
-  model: string | null,
-  clientToken: string | null,
-): Response {
-  return createSSEResponse(async (writer, encoder) => {
-    const id = `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-    const m = model || MODEL_NAME;
-
-    sseEvent(writer, encoder, "message_start", {
-      type: "message_start",
-      message: {
-        id, type: "message", role: "assistant", content: [], model: m,
-        stop_reason: null, stop_sequence: null,
-        usage: { input_tokens: 0, output_tokens: 0 },
-      },
-    });
-
-    sseEvent(writer, encoder, "content_block_start", {
-      type: "content_block_start", index: 0,
-      content_block: { type: "text", text: "" },
-    });
-
-    sseEvent(writer, encoder, "ping", { type: "ping" });
-
-    try {
-      await enqueue(prompt, systemPrompt ?? undefined, {
-        token: clientToken,
-        onChunk: (text: string) => {
-          sseEvent(writer, encoder, "content_block_delta", {
-            type: "content_block_delta", index: 0,
-            delta: { type: "text_delta", text },
-          });
-        },
-      });
-
-      sseEvent(writer, encoder, "content_block_stop", { type: "content_block_stop", index: 0 });
-      sseEvent(writer, encoder, "message_delta", {
-        type: "message_delta",
-        delta: { stop_reason: "end_turn", stop_sequence: null },
-        usage: { output_tokens: 0 },
-      });
-    } catch (err) {
-      sseEvent(writer, encoder, "error", {
-        type: "error", error: { type: "server_error", message: (err as Error).message },
-      });
-    }
-
-    sseEvent(writer, encoder, "message_stop", { type: "message_stop" });
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Responses stream (OpenAI responses API format)
-// ---------------------------------------------------------------------------
-
-export function handleResponsesStream(
-  prompt: string,
-  systemPrompt: string | null,
-  model: string | null,
-  clientToken: string | null,
-): Response {
-  return createSSEResponse(async (writer, encoder) => {
-    const id = `resp_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
-    const m = model || MODEL_NAME;
-    let fullText = "";
-
-    try {
-      await enqueue(prompt, systemPrompt ?? undefined, {
-        token: clientToken,
-        onChunk: (text: string) => {
-          fullText += text;
-          sseEvent(writer, encoder, "response.output_text.delta", {
-            type: "response.output_text.delta",
-            output_index: 0, content_index: 0, delta: text,
-          });
-        },
-      });
-
-      sseEvent(writer, encoder, "response.output_text.done", {
-        type: "response.output_text.done",
-        output_index: 0, content_index: 0, text: fullText,
-      });
-
-      sseEvent(writer, encoder, "response.completed", {
-        type: "response.completed",
-        response: {
-          id, object: "response", status: "completed",
-          output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: fullText }] }],
-          model: m,
-        },
-      });
-    } catch (err) {
-      sseEvent(writer, encoder, "error", {
-        type: "error", error: { type: "server_error", message: (err as Error).message },
-      });
-    }
   });
 }
 

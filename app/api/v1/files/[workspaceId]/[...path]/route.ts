@@ -3,6 +3,7 @@ export { handleOptions as OPTIONS } from "@/lib/oc/cors";
 
 import { ensureInitialized } from "@/lib/oc/init";
 import { authorize } from "@/lib/oc/authenticate";
+import { corsHeaders } from "@/lib/oc/cors";
 import * as files from "@/lib/oc/files";
 
 // ---------------------------------------------------------------------------
@@ -70,10 +71,7 @@ export async function GET(
       headers: {
         "Content-Type": contentType,
         "Content-Disposition": `attachment; filename="${encodeURIComponent(safeName)}"`,
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "*",
-        "Access-Control-Allow-Methods": "*",
-        "Access-Control-Expose-Headers": "X-Workspace-Id",
+        ...corsHeaders(),
       },
     });
   } catch (err) {

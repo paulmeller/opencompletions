@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { requireAuth } from "@/lib/require-auth";
-import { listSettings, setSetting } from "@/lib/db";
+import { listSettings, setSetting, deleteSetting } from "@/lib/db";
 import { invalidateConfigCache } from "@/lib/oc/config";
 
 export async function GET(request: Request) {
@@ -78,8 +78,12 @@ export async function PUT(request: Request) {
   }
 
   for (const [field, { key, type }] of Object.entries(SETTING_FIELDS)) {
-    if (body[field] !== undefined && body[field] !== "") {
-      setSetting(key, String(body[field]), type);
+    if (body[field] !== undefined) {
+      if (body[field] === "" || body[field] === null) {
+        deleteSetting(key);
+      } else {
+        setSetting(key, String(body[field]), type);
+      }
     }
   }
 
