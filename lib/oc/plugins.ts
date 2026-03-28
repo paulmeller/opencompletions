@@ -9,8 +9,9 @@
 import { execSync } from "child_process";
 import { getConfig } from "./config";
 
-// Plugin name validation: npm package format, no shell metacharacters
-const PLUGIN_NAME_RE = /^@?[a-z0-9][\w.\-/]*$/i;
+// Plugin name validation: allows npm packages, scoped packages, and plugin@registry format
+// No shell metacharacters (;|&$`(){}!#<> etc)
+const PLUGIN_NAME_RE = /^@?[a-z0-9][\w.\-/@]*$/i;
 const MAX_PLUGIN_NAME_LENGTH = 214;
 
 function validatePluginName(name: string): boolean {
