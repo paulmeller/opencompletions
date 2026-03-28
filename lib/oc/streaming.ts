@@ -250,7 +250,10 @@ export function handleAgentStream(
 ): Response {
   return createSSEResponse(async (writer, encoder, signal) => {
     const keepalive = setInterval(() => {
-      try { writer.write(encoder.encode(":ping\n\n")); } catch {}
+      // Send as data event (not SSE comment) so proxies like Cloudflare
+      // recognize it as response activity and don't enforce idle timeouts.
+      // SSE comments (":ping") are not treated as data by some CDN/proxies.
+      try { writer.write(encoder.encode("data: {\"type\":\"ping\"}\n\n")); } catch {}
     }, 15000);
 
     let aborted = false;
