@@ -115,6 +115,8 @@ export interface AgentOpts {
   abortSignal?: AbortSignal;
   /** Override the CLI provider for this request (e.g. switch from claude to codex). */
   cliProvider?: CliProvider;
+  /** Plugins to install before spawning the agent (e.g. ["docx-skill", "@anthropic-ai/mcp-server-fetch"]). */
+  plugins?: string[];
 }
 
 export interface McpServerConfig {

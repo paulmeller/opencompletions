@@ -12,6 +12,7 @@ import * as files from "@/lib/oc/files";
 import { logRunStart, logRunComplete, logRunEvents } from "@/lib/db";
 import { resolveSkills } from "@/lib/oc/skill-loader";
 import type { SkillFilter, PreloadSkill } from "@/lib/oc/skill-loader";
+import { installPluginsLocal, installPluginsSprite, installPluginsVercel } from "@/lib/oc/plugins";
 import type { AgentOpts } from "@/lib/oc/types";
 
 export async function POST(request: Request) {
@@ -242,6 +243,24 @@ export async function POST(request: Request) {
     agentOpts.systemPrompt = agentOpts.systemPrompt
       ? `${agentOpts.systemPrompt}\n\n${jsonInstruction}`
       : jsonInstruction;
+  }
+
+  // Install per-request plugins before spawning agent
+  const plugins = body.plugins as string[] | undefined;
+  if (plugins?.length) {
+    agentOpts.plugins = plugins;
+    if (requestBackend === "sprite") {
+      const spriteName = state.sessionToSprite.get(agentOpts.sessionId || "")
+        || state.workspaceToSprite.get(wsId || "")
+        || state.spritePool[0]?.name;
+      if (spriteName) await installPluginsSprite(plugins, spriteName);
+    } else if (requestBackend === "vercel") {
+      const sandboxId = state.sessionToSandbox.get(agentOpts.sessionId || "")
+        || state.workspaceToSandbox.get(wsId || "");
+      if (sandboxId) await installPluginsVercel(plugins, sandboxId);
+    } else if (requestBackend === "local") {
+      installPluginsLocal(plugins, workspaceCwd || undefined);
+    }
   }
 
   const stream = body.stream !== false; // default true

@@ -1656,6 +1656,12 @@
               }
             },
             "description": "Inject skill content directly into the system prompt (no MCP round-trip)"
+          },
+          "plugins": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "CLI plugins to install before spawning the agent (e.g. [\"docx-skill\"]). Runs `claude plugin install <name>` on the backend. Idempotent. Safe on remote backends (sandboxed VMs).",
+            "example": ["docx-skill", "@anthropic-ai/mcp-server-fetch"]
           }
         },
         "required": ["prompt"]

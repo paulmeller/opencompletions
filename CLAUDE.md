@@ -54,7 +54,9 @@ All completion endpoints route through the **agent pipeline** with full MCP tool
 - `/api/v1/responses` — OpenAI responses format (streams `output_text.delta` events, returns `Response`)
 - `/api/v1/agent` — Native agent format (streams raw agent events: `system`, `assistant`, `tool_use`, `result`)
 
-All endpoints use `enqueueAgent()` internally with MCP tool use. The first four translate agent events into SDK-compatible response formats. The agent endpoint returns raw events for full control.
+All endpoints use `enqueueAgent()` internally. The first four translate agent events into SDK-compatible response formats. The agent endpoint returns raw events for full control.
+
+The agent endpoint also supports `plugins` — CLI plugins installed on the backend before spawning (e.g. `"plugins": ["docx-skill"]`). Safe on remote backends (sandboxed VMs). Installed via `claude plugin install`.
 
 **Management endpoints**:
 - `POST /api/v1/setup` — Run setup commands on backends (admin-only)
