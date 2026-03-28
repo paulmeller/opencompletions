@@ -1238,6 +1238,19 @@
             "default": false,
             "description": "If true, returns SSE stream of chunks"
           },
+          "response_format": {
+            "oneOf": [
+              { "type": "string", "enum": ["json", "text"], "description": "Shorthand: 'json' or 'text'" },
+              {
+                "type": "object",
+                "properties": {
+                  "type": { "type": "string", "enum": ["json_object", "text"], "description": "Response format type" }
+                },
+                "description": "OpenAI-compatible format: {type: 'json_object'}"
+              }
+            ],
+            "description": "Response format. Use 'json' or {type: 'json_object'} to force JSON output. The server injects a JSON instruction into the system prompt and post-processes the result with a robust JSON extractor (handles preamble, code fences, nested objects)."
+          },
           "skill_filter": {
             "type": "object",
             "properties": {
