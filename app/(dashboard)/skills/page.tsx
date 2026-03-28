@@ -18,6 +18,9 @@ export default function SkillsPage() {
           <p className="text-sm text-muted-foreground mt-1">
             {skills.length} skill{skills.length !== 1 ? "s" : ""}
           </p>
+          <p className="text-sm text-muted-foreground mt-1">
+            Skills give agents domain expertise — compliance rules, analysis frameworks, document templates. Skills marked &apos;Always Active&apos; apply to every request automatically.
+          </p>
         </div>
         <Button asChild>
           <Link href="/skills/new">New Skill</Link>
@@ -25,16 +28,27 @@ export default function SkillsPage() {
       </div>
 
       {skills.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          No skills yet. Create one to get started.
-        </p>
+        <div className="text-center py-12">
+          <p className="text-muted-foreground">No skills yet.</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            Skills teach agents domain knowledge — compliance rules, analysis playbooks, document templates.
+          </p>
+          <div className="flex justify-center gap-3 mt-4">
+            <Link href="/skills/new">
+              <Button>Create a Skill</Button>
+            </Link>
+          </div>
+        </div>
       )}
 
       <div className="grid gap-4">
         {skills.map((skill) => (
           <Card key={skill.name}>
             <CardHeader>
-              <CardTitle>{skill.display_name || skill.name}</CardTitle>
+              <CardTitle>
+                {skill.display_name || skill.name}
+                {skill.auto_apply ? <Badge variant="secondary" className="text-xs">Always Active</Badge> : null}
+              </CardTitle>
               <CardDescription>{skill.description}</CardDescription>
               <CardAction>
                 <div className="flex items-center gap-2">

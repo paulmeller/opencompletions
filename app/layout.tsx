@@ -6,8 +6,8 @@ import { cn } from "@/lib/utils";
 const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
-  title: "OpenCompletions Dashboard",
-  description: "Manage skills, API keys, and monitor agent runs",
+  title: "OpenCompletions",
+  description: "One API for coding agents with reusable skills and remote execution.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

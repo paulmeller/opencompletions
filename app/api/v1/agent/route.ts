@@ -285,10 +285,25 @@ export async function POST(request: Request) {
     totalCostUsd: number | null;
     usage: Record<string, unknown> | null;
   } = { sessionId: null, numTurns: null, totalCostUsd: null, usage: null };
-  const runEvents: Array<{ type: string; ts: number }> = [];
+  const runEvents: Array<Record<string, unknown>> = [];
+  const MAX_EVENTS_SIZE = 1_000_000; // 1MB cap
+  let eventsSize = 0;
+  let fullEventsMode = true;
 
   agentOpts._beforeEvent = (event: Record<string, unknown>) => {
-    runEvents.push({ type: event.type as string, ts: Date.now() });
+    if (fullEventsMode) {
+      const stored = { ...event, ts: Date.now() };
+      const size = JSON.stringify(stored).length;
+      if (eventsSize + size > MAX_EVENTS_SIZE) {
+        fullEventsMode = false; // switch to minimal mode
+        runEvents.push({ type: event.type as string, ts: Date.now() });
+      } else {
+        eventsSize += size;
+        runEvents.push(stored);
+      }
+    } else {
+      runEvents.push({ type: event.type as string, ts: Date.now() });
+    }
     if (event.type === "result") {
       runResult.sessionId = (event.session_id as string) || null;
       runResult.numTurns = (event.num_turns as number) || null;

@@ -3,6 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import Link from "next/link";
 
 function statusVariant(status: string): "secondary" | "destructive" | "outline" {
   if (status === "completed") return "secondary";
@@ -52,7 +53,11 @@ export default async function RunsPage() {
                 return (
                   <TableRow key={run.id}>
                     <TableCell><Badge variant={statusVariant(run.status)}>{run.status}</Badge></TableCell>
-                    <TableCell className="text-muted-foreground font-mono text-xs">{run.id.slice(0, 8)}</TableCell>
+                    <TableCell>
+                      <Link href={`/runs/${run.id}`} className="font-mono text-xs text-primary hover:underline">
+                        {run.id.slice(0, 8)}
+                      </Link>
+                    </TableCell>
                     <TableCell className="max-w-sm truncate">{run.prompt?.slice(0, 100) || "—"}</TableCell>
                     <TableCell className="text-muted-foreground hidden md:table-cell">{run.cli || "—"}</TableCell>
                     <TableCell className="text-muted-foreground text-xs hidden lg:table-cell">{run.model || "—"}</TableCell>
