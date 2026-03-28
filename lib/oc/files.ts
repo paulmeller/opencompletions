@@ -16,6 +16,7 @@ import crypto from "crypto";
 import zlib from "zlib";
 import { Readable } from "stream";
 import { getConfig } from "./config";
+import type { SkillFull } from "@/lib/db";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -345,6 +346,113 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} bytes`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// ---------------------------------------------------------------------------
+// Skill file writing (hybrid skill loading)
+// ---------------------------------------------------------------------------
+
+/**
+ * Reconstruct a SKILL.md from a SkillFull record.
+ */
+function buildSkillMd(skill: SkillFull): string {
+  const tags = JSON.parse(skill.tags || "[]") as string[];
+  const lines = [
+    "---",
+    `name: ${skill.display_name}`,
+    `slug: ${skill.name}`,
+    `description: ${skill.description}`,
+    `tags: [${tags.join(", ")}]`,
+  ];
+  if (skill.auto_apply) lines.push("auto_apply: true");
+  lines.push("---", "", skill.instructions || "");
+  return lines.join("\n");
+}
+
+/**
+ * Write skill files to a workspace's .skills/ directory.
+ *
+ * For each skill, creates:
+ *   .skills/{skill.name}/SKILL.md
+ *   .skills/{skill.name}/references/{filename}  (for each resource)
+ *
+ * Supports all four backends: local, sprite, vercel, cloudflare.
+ */
+export async function writeSkillFiles(
+  workspaceCwd: string,
+  skills: SkillFull[],
+  backend: string,
+  backendId?: string,
+): Promise<void> {
+  for (const skill of skills) {
+    const skillDir = `.skills/${skill.name}`;
+    const skillMd = buildSkillMd(skill);
+    const skillMdPath = `${skillDir}/SKILL.md`;
+
+    if (backend === "local") {
+      const absDir = path.join(workspaceCwd, skillDir);
+      fs.mkdirSync(absDir, { recursive: true });
+      fs.writeFileSync(path.join(workspaceCwd, skillMdPath), skillMd);
+
+      if (skill.resources?.length) {
+        const refsDir = path.join(absDir, "references");
+        fs.mkdirSync(refsDir, { recursive: true });
+        for (const r of skill.resources) {
+          fs.writeFileSync(path.join(refsDir, r.file_name), r.content);
+        }
+      }
+    } else if (backend === "sprite") {
+      const spriteName = backendId!;
+      await spriteWriteFile(
+        spriteName,
+        `${workspaceCwd}/${skillMdPath}`,
+        Buffer.from(skillMd),
+      );
+
+      if (skill.resources?.length) {
+        for (const r of skill.resources) {
+          await spriteWriteFile(
+            spriteName,
+            `${workspaceCwd}/${skillDir}/references/${r.file_name}`,
+            Buffer.from(r.content),
+          );
+        }
+      }
+    } else if (backend === "vercel") {
+      const sandboxId = backendId!;
+      // Build all files for this skill into a tar
+      const tarFiles: Array<{ name: string; buffer: Buffer }> = [
+        { name: skillMdPath, buffer: Buffer.from(skillMd) },
+      ];
+      if (skill.resources?.length) {
+        for (const r of skill.resources) {
+          tarFiles.push({
+            name: `${skillDir}/references/${r.file_name}`,
+            buffer: Buffer.from(r.content),
+          });
+        }
+      }
+      const tar = createTarGz(tarFiles);
+      await vercelWriteTar(sandboxId, workspaceCwd, tar);
+    } else if (backend === "cloudflare") {
+      const sandboxId = backendId!;
+      await cloudflareWriteFile(
+        sandboxId,
+        `${workspaceCwd}/${skillMdPath}`,
+        Buffer.from(skillMd),
+      );
+
+      if (skill.resources?.length) {
+        for (const r of skill.resources) {
+          await cloudflareWriteFile(
+            sandboxId,
+            `${workspaceCwd}/${skillDir}/references/${r.file_name}`,
+            Buffer.from(r.content),
+          );
+        }
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

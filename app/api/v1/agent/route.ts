@@ -195,7 +195,7 @@ export async function POST(request: Request) {
   // Resolve skills (filter + preload)
   const skillFilter = body.skill_filter as SkillFilter | undefined;
   const preloadSkills = body.preload_skills as PreloadSkill[] | undefined;
-  const { systemPromptPrefix, mcpServers: skillMcpServers } = resolveSkills(request, skillFilter, preloadSkills);
+  const { systemPromptPrefix, remainingSkillNames } = resolveSkills(request, skillFilter, preloadSkills);
 
   if (systemPromptPrefix) {
     agentOpts.systemPrompt = agentOpts.systemPrompt
@@ -203,12 +203,27 @@ export async function POST(request: Request) {
       : systemPromptPrefix;
   }
 
-  // Merge skill MCP with any per-request MCP servers
-  if (skillMcpServers) {
-    agentOpts.mcpServers = {
-      ...skillMcpServers,
-      ...(agentOpts.mcpServers || {}),
-    };
+  // Write on-demand skill files to workspace for file-based discovery
+  if (remainingSkillNames.length > 0 && workspaceCwd) {
+    const { listSkillsByNames } = await import("@/lib/db");
+    const skills = listSkillsByNames(remainingSkillNames);
+    if (skills.length > 0) {
+      // Determine backend-specific ID for remote file writing
+      let backendId: string | undefined;
+      if (requestBackend === "sprite") {
+        backendId = state.workspaceToSprite.get(wsId!) || state.spritePool[0]?.name;
+      } else if (requestBackend === "vercel") {
+        backendId = state.workspaceToSandbox.get(wsId!) || state.vercelPool[0]?.id;
+      } else if (requestBackend === "cloudflare") {
+        backendId = state.workspaceToCloudflare.get(wsId!) || state.cloudflarePool[0]?.id;
+      }
+      await files.writeSkillFiles(workspaceCwd, skills, requestBackend, backendId);
+
+      const hint = `Additional skills are available in .skills/ directory. Read the SKILL.md files for instructions when relevant.`;
+      agentOpts.systemPrompt = agentOpts.systemPrompt
+        ? `${agentOpts.systemPrompt}\n\n${hint}`
+        : hint;
+    }
   }
 
   // Auto-inject file manifest into system prompt

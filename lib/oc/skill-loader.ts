@@ -2,11 +2,12 @@
  * Shared skill loading logic for all completion/agent endpoints.
  *
  * Resolves skill_filter and preload_skills fields, builds the system
- * prompt injection and filtered MCP server config.
+ * prompt injection. On-demand skills (not auto-applied or preloaded)
+ * are returned as remainingSkillNames for file-based writing by the
+ * agent endpoint.
  */
 
 import { getSkill, listSkillsByTags, listAutoApplySkills } from "@/lib/db";
-import type { AgentOpts } from "./types";
 
 export interface SkillFilter {
   names?: string[];
@@ -22,14 +23,18 @@ export interface PreloadSkill {
 export interface SkillLoadResult {
   /** System prompt prefix with preloaded skill content (or empty string) */
   systemPromptPrefix: string;
-  /** MCP server config to inject (or null to skip MCP) */
-  mcpServers: AgentOpts["mcpServers"] | null;
+  /** Skills in filter but NOT preloaded/auto-applied — for file-based writing */
+  remainingSkillNames: string[];
 }
 
 const MAX_PRELOAD_SIZE = 100 * 1024; // 100KB
 
 /**
- * Resolve skills and build the system prompt prefix + MCP config.
+ * Resolve skills and build the system prompt prefix.
+ *
+ * Returns the remaining skill names (from the filter) that were not
+ * injected via auto-apply or preload. The caller can write these to
+ * the workspace as files for on-demand discovery.
  */
 export function resolveSkills(
   request: Request,
@@ -105,38 +110,13 @@ export function resolveSkills(
     }
   }
 
-  // Deduplicate: remove preloaded and auto-apply skills from MCP filter
+  // Compute remaining skill names: filter names minus preloaded and auto-applied
   const allInjectedNames = new Set([...preloadedNames, ...autoApplyNames]);
-  if (filterNames && allInjectedNames.size > 0) {
-    filterNames = filterNames.filter((n) => !allInjectedNames.has(n));
-  }
-
-  // Build MCP config
-  const shouldInjectMcp = !preloadSkills?.length || (filterNames && filterNames.length > 0) || !skillFilter;
-
-  let mcpServers: AgentOpts["mcpServers"] | null = null;
-  if (shouldInjectMcp) {
-    const host = request.headers.get("x-forwarded-host")
-      || request.headers.get("host")
-      || `localhost:${process.env.PORT || 3000}`;
-    const proto = request.headers.get("x-forwarded-proto") || "http";
-    const dashboardUrl = process.env.MCP_BASE_URL || `${proto}://${host}`;
-    const mcpAuthToken = process.env.SESSION_SECRET || "";
-
-    let mcpUrl = `${dashboardUrl}/api/mcp`;
-    if (filterNames && filterNames.length > 0) {
-      mcpUrl += `?skills=${filterNames.join(",")}`;
-    }
-
-    mcpServers = {
-      skills: {
-        type: "http" as const,
-        url: mcpUrl,
-        headers: mcpAuthToken ? { Authorization: `Bearer ${mcpAuthToken}` } : {},
-      },
-    };
+  let remainingSkillNames: string[] = [];
+  if (filterNames) {
+    remainingSkillNames = filterNames.filter((n) => !allInjectedNames.has(n));
   }
 
   const combinedPrefix = [autoApplyContent, preloadContent].filter(Boolean).join("\n\n---\n\n");
-  return { systemPromptPrefix: combinedPrefix, mcpServers };
+  return { systemPromptPrefix: combinedPrefix, remainingSkillNames };
 }

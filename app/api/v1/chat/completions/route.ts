@@ -45,7 +45,11 @@ export async function POST(request: Request) {
   const config = getConfig();
   const skillFilter = body.skill_filter as SkillFilter | undefined;
   const preloadSkills = body.preload_skills as PreloadSkill[] | undefined;
-  const { systemPromptPrefix, mcpServers } = resolveSkills(request, skillFilter, preloadSkills);
+  const { systemPromptPrefix, remainingSkillNames } = resolveSkills(request, skillFilter, preloadSkills);
+
+  if (remainingSkillNames.length > 0) {
+    console.warn(`[chat/completions] ${remainingSkillNames.length} skill(s) not injected (no workspace for file-based delivery): ${remainingSkillNames.join(", ")}`);
+  }
 
   let finalSystemPrompt = systemPrompt || undefined;
   if (systemPromptPrefix) {
@@ -62,7 +66,7 @@ export async function POST(request: Request) {
     clientToken: forwardToken || undefined,
     backend: config.backend,
     responseFormat: normalizeResponseFormat(body.response_format as string | { type: string } | undefined),
-    mcpServers: mcpServers || undefined,
+    mcpServers: (body.mcp_servers as AgentOpts["mcpServers"]) || undefined,
   };
 
   const model = (body.model as string) || "claude-code";
