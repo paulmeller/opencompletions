@@ -22,6 +22,7 @@ export function ServerConfigCard() {
   const [agentTimeout, setAgentTimeout] = useState("600000");
   const [setupCommands, setSetupCommands] = useState("");
   const [savedSetupCommands, setSavedSetupCommands] = useState<string | null>(null);
+  const [customEnv, setCustomEnv] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [savedApiKey, setSavedApiKey] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -40,6 +41,12 @@ export function ServerConfigCard() {
         if (map.agent_max_turns) setAgentMaxTurns(map.agent_max_turns);
         if (map.agent_timeout) setAgentTimeout(map.agent_timeout);
         if (map.setup_commands) { setSavedSetupCommands(map.setup_commands); setSetupCommands(map.setup_commands); }
+        if (map.custom_env) {
+          try {
+            const parsed = JSON.parse(map.custom_env);
+            setCustomEnv(Object.entries(parsed).map(([k, v]) => `${k}=${v}`).join("\n"));
+          } catch {}
+        }
         if (map.api_key) setSavedApiKey(map.api_key);
       })
       .catch(() => {});
@@ -58,6 +65,14 @@ export function ServerConfigCard() {
         agent_timeout: agentTimeout,
       };
       if (setupCommands.trim()) body.setup_commands = setupCommands.trim();
+      if (customEnv.trim()) {
+        const envObj: Record<string, string> = {};
+        for (const line of customEnv.split("\n")) {
+          const eq = line.indexOf("=");
+          if (eq > 0) envObj[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+        }
+        body.custom_env = JSON.stringify(envObj);
+      }
       if (apiKey.trim()) body.api_key = apiKey.trim();
 
       const res = await fetch("/api/settings", {
@@ -136,6 +151,20 @@ export function ServerConfigCard() {
           />
           <FieldDescription>
             One command per line. Runs once per backend instance on startup (idempotent via sentinel hash).
+          </FieldDescription>
+        </Field>
+
+        <Field>
+          <FieldLabel>Custom Environment Variables</FieldLabel>
+          <Textarea
+            value={customEnv}
+            onChange={(e) => setCustomEnv(e.target.value)}
+            placeholder={"GITHUB_TOKEN=ghp_xxxx\nDATABASE_URL=postgres://...\nMY_API_KEY=secret"}
+            rows={4}
+            className="font-mono text-sm"
+          />
+          <FieldDescription>
+            KEY=VALUE format, one per line. Forwarded to the agent process as real env vars. Per-request env vars in the API body override these defaults.
           </FieldDescription>
         </Field>
 

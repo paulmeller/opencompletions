@@ -6,7 +6,7 @@ import { authorize } from "@/lib/oc/authenticate";
 import { handleAgentStream, handleAgentBuffered } from "@/lib/oc/streaming";
 import { getConfig } from "@/lib/oc/config";
 import { getState } from "@/lib/oc/state";
-import { normalizeResponseFormat } from "@/lib/oc/helpers";
+import { normalizeResponseFormat, validateCustomEnv } from "@/lib/oc/helpers";
 import { CLI_PROVIDERS, getCliProvider } from "@/lib/oc/cli-providers";
 import * as files from "@/lib/oc/files";
 import { logRunStart, logRunComplete, logRunEvents } from "@/lib/db";
@@ -91,6 +91,18 @@ export async function POST(request: Request) {
     if (body.max_budget_usd != null) {
       return Response.json(
         { error: { message: "opencode backend does not support max_budget_usd", type: "invalid_request_error" } },
+        { status: 400 },
+      );
+    }
+  }
+
+  // Validate per-request env vars
+  const requestEnv = body.env as Record<string, string> | undefined;
+  if (requestEnv) {
+    const validation = validateCustomEnv(requestEnv);
+    if (!validation.valid) {
+      return Response.json(
+        { error: { message: `Invalid env vars: ${validation.errors.join("; ")}`, type: "invalid_request_error" } },
         { status: 400 },
       );
     }
@@ -191,6 +203,7 @@ export async function POST(request: Request) {
     backend: requestBackend as AgentOpts["backend"],
     cliProvider: requestCli,
     responseFormat: normalizeResponseFormat(body.response_format as string | { type: string } | undefined),
+    env: requestEnv,
   };
 
   // Resolve skills (filter + preload)

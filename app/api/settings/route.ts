@@ -39,11 +39,12 @@ const SETTING_FIELDS: Record<string, { key: string; type: "text" | "secret" }> =
   agent_max_turns: { key: "agent_max_turns", type: "text" },
   agent_timeout: { key: "agent_timeout", type: "text" },
   setup_commands: { key: "setup_commands", type: "text" },
+  custom_env: { key: "custom_env", type: "secret" },
 };
 
 // Fields that can only be modified by dashboard users (WorkOS session),
 // not via external API keys. These execute arbitrary commands on backends.
-const ADMIN_ONLY_FIELDS = ["setup_commands"];
+const ADMIN_ONLY_FIELDS = ["setup_commands", "custom_env"];
 
 export async function PUT(request: Request) {
   const auth = await requireAuth(request);

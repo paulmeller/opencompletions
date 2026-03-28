@@ -15,6 +15,7 @@ import {
 import { getConfig } from "../config";
 import {
   buildAuthEnv,
+  buildCustomEnv,
   buildAgentCliArgs,
   cleanOutput,
   cleanChunk,
@@ -242,7 +243,7 @@ export async function runClaudeOnVercel(
   const sandbox = acquireVercelSandbox();
   try {
     const cmdArgs = buildVercelClaudeArgs(prompt, systemPrompt);
-    const env = buildAuthEnv(clientToken ?? undefined);
+    const env = { ...buildCustomEnv({}), ...buildAuthEnv(clientToken ?? undefined) };
     let cmdId: string;
     try {
       cmdId = await vercelExec(sandbox.id, cmdArgs, env);
@@ -290,7 +291,7 @@ export async function runClaudeVercelStreaming(
   const sandbox = acquireVercelSandbox();
   try {
     const cmdArgs = buildVercelClaudeArgs(prompt, systemPrompt);
-    const env = buildAuthEnv(clientToken ?? undefined);
+    const env = { ...buildCustomEnv({}), ...buildAuthEnv(clientToken ?? undefined) };
     let cmdId: string;
     try {
       cmdId = await vercelExec(sandbox.id, cmdArgs, env);
@@ -369,7 +370,7 @@ export async function runAgentOnVercel(
   try {
     const cliArgs = buildAgentCliArgs(opts);
     cliArgs.push("--", prompt); // -- prevents prompt from being parsed as a flag
-    const env = { ...buildAuthEnv(opts.clientToken), ...CLI.buildMcpEnv(opts) };
+    const env = { ...buildCustomEnv(opts), ...buildAuthEnv(opts.clientToken), ...CLI.buildMcpEnv(opts) };
 
     // If workspace cwd, wrap in bash -c with cd
     let execCommand = "claude";

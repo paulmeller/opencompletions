@@ -35,6 +35,7 @@ import {
 import { getConfig } from "../config";
 import {
   buildAuthEnv,
+  buildCustomEnv,
   buildAgentCliArgs,
   cleanOutput,
   cleanChunk,
@@ -341,7 +342,7 @@ export async function runClaudeOnCloudflare(
   const sandbox = acquireCloudflareSandbox();
   try {
     const cmdArgs = buildCloudflareClaudeArgs(prompt, systemPrompt);
-    const env = buildAuthEnv(clientToken ?? undefined);
+    const env = { ...buildCustomEnv({}), ...buildAuthEnv(clientToken ?? undefined) };
 
     let result: { stdout: string; stderr: string; exitCode: number };
     try {
@@ -382,7 +383,7 @@ export async function runCloudflareStreaming(
   const sandbox = acquireCloudflareSandbox();
   try {
     const cmdArgs = buildCloudflareClaudeArgs(prompt, systemPrompt);
-    const env = buildAuthEnv(clientToken ?? undefined);
+    const env = { ...buildCustomEnv({}), ...buildAuthEnv(clientToken ?? undefined) };
 
     let exitCode: number;
     let stderr = "";
@@ -472,7 +473,7 @@ export async function runAgentOnCloudflare(
   try {
     const cliArgs = buildAgentCliArgs(opts);
     cliArgs.push("--", prompt);
-    const env = { ...buildAuthEnv(opts.clientToken), ...CLI.buildMcpEnv(opts) };
+    const env = { ...buildCustomEnv(opts), ...buildAuthEnv(opts.clientToken), ...CLI.buildMcpEnv(opts) };
 
     // If workspace cwd, wrap in bash -c with cd
     let execCommand = "claude";

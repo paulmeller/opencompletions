@@ -116,6 +116,16 @@ When activated, analyze the contract...
 - **Internal MCP**: SESSION_SECRET as Bearer token (injected by agent route)
 - Every user gets a Default API key auto-created on first login
 
+## Custom Environment Variables
+
+Server-wide defaults configured in Settings (encrypted, admin-only) + per-request overrides via `env` field in the API body.
+
+```json
+{"prompt": "...", "env": {"GITHUB_TOKEN": "ghp_xxxx"}}
+```
+
+Forwarded as real process env vars to the CLI. Auth vars (ANTHROPIC_API_KEY, etc.) always take precedence. Dangerous vars (PATH, NODE_OPTIONS, LD_PRELOAD) are blocked.
+
 ## Setup Commands
 
 One-time shell commands that run on each backend instance at startup (e.g. installing Claude Code plugins). Configured via:

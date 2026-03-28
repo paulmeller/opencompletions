@@ -11,6 +11,7 @@ import { getState, acquireSprite, releaseSprite } from "../state";
 import { getConfig } from "../config";
 import {
   buildAuthEnv,
+  buildCustomEnv,
   buildAgentCliArgs,
   cleanOutput,
   cleanChunk,
@@ -174,7 +175,7 @@ export async function runClaudeOnSprite(
         "Content-Type": "text/plain",
         Accept: "application/json",
       },
-      body: buildSpriteBody(clientToken ?? undefined, prompt),
+      body: buildSpriteBody(clientToken ?? undefined, prompt, buildCustomEnv({})),
       signal: controller.signal,
     });
 
@@ -229,7 +230,7 @@ export async function runClaudeSpriteStreaming(
         "Content-Type": "text/plain",
         Accept: "application/json",
       },
-      body: buildSpriteBody(clientToken ?? undefined, prompt),
+      body: buildSpriteBody(clientToken ?? undefined, prompt, buildCustomEnv({})),
       signal: controller.signal,
     });
 
@@ -357,7 +358,10 @@ export async function runAgentOnSprite(
         "Content-Type": "text/plain",
         Accept: "application/json",
       },
-      body: buildSpriteBody(opts.clientToken, prompt, CLI.buildMcpEnv(opts)),
+      body: buildSpriteBody(opts.clientToken, prompt, {
+        ...buildCustomEnv(opts),
+        ...CLI.buildMcpEnv(opts),
+      }),
       signal: controller.signal,
     });
 

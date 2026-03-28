@@ -13,6 +13,7 @@ import { getState } from "../state";
 import { getConfig } from "../config";
 import {
   buildAuthEnv,
+  buildCustomEnv,
   cleanOutput,
   cleanChunk,
   parseNDJSONLines,
@@ -44,7 +45,11 @@ export function runClaudeLocal(
       }
     }
 
-    const env = { ...process.env, ...CLI.buildAuthEnv(clientToken ?? undefined) };
+    const env = {
+      ...process.env,
+      ...buildCustomEnv({}),
+      ...CLI.buildAuthEnv(clientToken ?? undefined),
+    };
 
     const proc = spawn(CLI.command, cliArgs, {
       stdio: ["pipe", "pipe", "pipe"],
@@ -120,7 +125,11 @@ export function runClaudeLocalStreaming(
       }
     }
 
-    const env = { ...process.env, ...CLI.buildAuthEnv(clientToken ?? undefined) };
+    const env = {
+      ...process.env,
+      ...buildCustomEnv({}),
+      ...CLI.buildAuthEnv(clientToken ?? undefined),
+    };
 
     const proc = spawn(CLI.command, cliArgs, {
       stdio: ["pipe", "pipe", "pipe"],
@@ -203,6 +212,7 @@ export function runAgentLocal(
 
       const env = {
         ...process.env,
+        ...buildCustomEnv(opts),
         ...cli.buildAuthEnv(opts.clientToken),
         ...cli.buildMcpEnv(opts),
       };

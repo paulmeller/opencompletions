@@ -121,6 +121,16 @@ export function getConfig(): OcConfig {
 
     // Setup commands (run once per backend instance)
     setupCommands: strList("setup_commands", "SETUP_COMMANDS", all),
+
+    // Custom environment variables
+    customEnv: (() => {
+      try {
+        const raw = (all && all.custom_env) || process.env.CUSTOM_ENV || "{}";
+        return JSON.parse(raw) as Record<string, string>;
+      } catch {
+        return {};
+      }
+    })(),
   };
 
   globalForConfig.__ocCachedConfig = config;

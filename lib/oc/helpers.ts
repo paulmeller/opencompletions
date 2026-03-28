@@ -11,6 +11,64 @@ import { getConfig } from "./config";
 import type { AgentOpts, AgentEvent, McpServerConfig } from "./types";
 
 // ---------------------------------------------------------------------------
+// Custom env validation and merging
+// ---------------------------------------------------------------------------
+
+const ENV_BLOCKLIST = new Set([
+  "PATH", "HOME", "USER", "SHELL", "TERM", "TMPDIR", "TEMP", "TMP",
+  "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH",
+  "NODE_OPTIONS", "NODE_PATH",
+  "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY",
+  "OPENCODE_CONFIG_CONTENT", "CODEX_API_KEY", "GEMINI_API_KEY",
+]);
+
+const ENV_KEY_RE = /^[A-Z_][A-Z0-9_]*$/;
+const MAX_ENV_VARS = 50;
+const MAX_ENV_SIZE = 64 * 1024;
+
+export function validateCustomEnv(env: Record<string, string>): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  const entries = Object.entries(env);
+
+  if (entries.length > MAX_ENV_VARS) {
+    errors.push(`Too many env vars (${entries.length}, max ${MAX_ENV_VARS})`);
+  }
+
+  let totalSize = 0;
+  for (const [key, value] of entries) {
+    if (!ENV_KEY_RE.test(key)) {
+      errors.push(`Invalid env var name: "${key}" (must be uppercase with underscores)`);
+    }
+    if (ENV_BLOCKLIST.has(key)) {
+      errors.push(`Blocked env var: "${key}"`);
+    }
+    totalSize += key.length + String(value).length;
+  }
+
+  if (totalSize > MAX_ENV_SIZE) {
+    errors.push(`Env vars too large (${totalSize} bytes, max ${MAX_ENV_SIZE})`);
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+export function buildCustomEnv(opts: { env?: Record<string, string> }): Record<string, string> {
+  const config = getConfig();
+  const serverEnv = config.customEnv || {};
+  const requestEnv = opts.env || {};
+
+  // Merge: per-request overrides server defaults
+  const merged = { ...serverEnv, ...requestEnv };
+
+  // Strip blocklisted vars
+  for (const key of ENV_BLOCKLIST) {
+    delete merged[key];
+  }
+
+  return merged;
+}
+
+// ---------------------------------------------------------------------------
 // Regex for stripping terminal artifacts
 // ---------------------------------------------------------------------------
 

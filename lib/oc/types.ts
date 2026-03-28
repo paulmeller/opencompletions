@@ -117,6 +117,8 @@ export interface AgentOpts {
   cliProvider?: CliProvider;
   /** Plugins to install before spawning the agent (e.g. ["docx-skill", "@anthropic-ai/mcp-server-fetch"]). */
   plugins?: string[];
+  /** Custom environment variables forwarded to the CLI process. */
+  env?: Record<string, string>;
 }
 
 export interface McpServerConfig {
@@ -226,4 +228,6 @@ export interface OcConfig {
 
   /** Shell commands to run once per backend instance (e.g. plugin installs). */
   setupCommands: string[];
+  /** Server-wide custom environment variables forwarded to agent processes. */
+  customEnv: Record<string, string>;
 }
