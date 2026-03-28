@@ -58,11 +58,15 @@ All endpoints use `enqueueAgent()` internally with MCP tool use. The first four 
 
 **Management endpoints**:
 - `POST /api/v1/setup` — Run setup commands on backends (admin-only)
-- `GET /api/v1/models` — Model list
+- `GET /api/v1/models` — Model list (no auth required)
+- `GET /api/v1/status` — Queue/worker status (no auth required)
 - `GET /api/v1/backends` — Available backends
 - `GET /api/v1/runs` — Agent run history
+- `GET /api/v1/stats` — Aggregated run statistics
 - `POST /api/v1/files/upload` — Upload to workspace
 - `POST /api/mcp` — Skills MCP server (JSON-RPC 2.0)
+- `GET /api/health` — Health check (no auth required)
+- `GET /docs` — Scalar API docs viewer (serves OpenAPI spec)
 
 **Skills management**:
 - `GET/POST /api/skills` — List/create skills
