@@ -26,6 +26,12 @@ Only 5 environment variables are needed:
 
 Backend config (sprite tokens, claude tokens, etc.) is managed via the Settings page in the UI.
 
+Optional for persistent storage (survives Replit redeploys):
+- `TURSO_DATABASE_URL` — Turso database URL (e.g. `libsql://your-db.turso.io`)
+- `TURSO_AUTH_TOKEN` — Turso auth token
+
+Without these, uses local SQLite at `data/skills.db` (data lost on redeploy).
+
 ## Architecture
 
 Single Next.js app with:
@@ -33,7 +39,7 @@ Single Next.js app with:
 - **Dashboard UI** (shadcn/ui + WorkOS AuthKit) under `app/(dashboard)/`
 - **API routes** under `app/api/v1/` (completions, agent, models, runs, files, etc.)
 - **Engine modules** under `lib/oc/` (config, state, queue, CLI providers, backends, streaming, files, auth)
-- **SQLite database** (better-sqlite3) with settings, skills, agent_runs, user_keys tables
+- **SQLite database** (Turso/libsql with embedded replicas, falls back to local SQLite) with settings, skills, agent_runs, user_keys tables
 - **4 CLI providers**: claude, opencode, codex, gemini
 - **3+ execution backends**: local (subprocess), sprite (Sprites.dev VMs), vercel (Vercel Sandbox), cloudflare (coming)
 

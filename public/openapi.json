@@ -1354,6 +1354,33 @@
           "stream": {
             "type": "boolean",
             "default": false
+          },
+          "response_format": {
+            "oneOf": [
+              { "type": "string", "enum": ["json", "text"] },
+              { "type": "object", "properties": { "type": { "type": "string", "enum": ["json_object", "text"] } } }
+            ],
+            "description": "Response format. Use 'json' or {type: 'json_object'} to force JSON output."
+          },
+          "skill_filter": {
+            "type": "object",
+            "properties": {
+              "names": { "type": "array", "items": { "type": "string" } },
+              "tags": { "type": "array", "items": { "type": "string" } }
+            },
+            "description": "Filter which skills the MCP server exposes"
+          },
+          "preload_skills": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "instructions": { "type": "string" },
+                "resources": { "type": "object", "additionalProperties": { "type": "string" } }
+              }
+            },
+            "description": "Inject skill content into system prompt (no MCP round-trip)"
           }
         },
         "required": ["prompt"]
@@ -1454,6 +1481,33 @@
           "stream": {
             "type": "boolean",
             "default": false
+          },
+          "response_format": {
+            "oneOf": [
+              { "type": "string", "enum": ["json", "text"] },
+              { "type": "object", "properties": { "type": { "type": "string", "enum": ["json_object", "text"] } } }
+            ],
+            "description": "Response format. Use 'json' or {type: 'json_object'} to force JSON output."
+          },
+          "skill_filter": {
+            "type": "object",
+            "properties": {
+              "names": { "type": "array", "items": { "type": "string" } },
+              "tags": { "type": "array", "items": { "type": "string" } }
+            },
+            "description": "Filter which skills the MCP server exposes"
+          },
+          "preload_skills": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "instructions": { "type": "string" },
+                "resources": { "type": "object", "additionalProperties": { "type": "string" } }
+              }
+            },
+            "description": "Inject skill content into system prompt (no MCP round-trip)"
           }
         },
         "required": ["messages"]
@@ -1934,6 +1988,33 @@
             "type": "boolean",
             "default": false,
             "description": "If true, returns SSE stream of response events"
+          },
+          "response_format": {
+            "oneOf": [
+              { "type": "string", "enum": ["json", "text"] },
+              { "type": "object", "properties": { "type": { "type": "string", "enum": ["json_object", "text"] } } }
+            ],
+            "description": "Response format. Use 'json' or {type: 'json_object'} to force JSON output."
+          },
+          "skill_filter": {
+            "type": "object",
+            "properties": {
+              "names": { "type": "array", "items": { "type": "string" } },
+              "tags": { "type": "array", "items": { "type": "string" } }
+            },
+            "description": "Filter which skills the MCP server exposes"
+          },
+          "preload_skills": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "instructions": { "type": "string" },
+                "resources": { "type": "object", "additionalProperties": { "type": "string" } }
+              }
+            },
+            "description": "Inject skill content into system prompt (no MCP round-trip)"
           }
         },
         "required": ["input"]
