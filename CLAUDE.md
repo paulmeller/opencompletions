@@ -75,17 +75,21 @@ All endpoints use `enqueueAgent()` internally with MCP tool use. The first four 
 
 ## Skills
 
-Skills are domain-specific instructions + reference files that agents can use. Stored in SQLite, served via MCP.
+Skills are domain-specific instructions + reference files that agents can use. Stored in SQLite.
 
-**Loading skills in requests** (all completion endpoints support these fields):
-- `skill_filter: {names?, tags?}` — whitelist which DB skills the MCP exposes
-- `preload_skills: [{name?} | {instructions?, resources?}]` — inject skill content directly into system prompt (no MCP round-trip, 100KB cap)
+**Three loading mechanisms** (all completion endpoints support `preload_skills`; `skill_filter` with file-based is agent endpoint only):
+
+| Mechanism | How | Turns | When |
+|-----------|-----|-------|------|
+| `auto_apply` flag on skill | System prompt injection | 0 | Always-on skills (compliance, style guides) |
+| `preload_skills` in request | System prompt injection | 0 | Caller knows which skills to use |
+| `skill_filter` in request | Writes `.skills/` files to workspace, agent reads via `Read` tool | 1+ | On-demand discovery (agent endpoint only, requires workspace) |
 
 **Modes**:
-1. No skill params → all DB skills available via MCP (default)
-2. `skill_filter` only → MCP exposes filtered subset, agent discovers via tool use
-3. `preload_skills` only → instructions injected into prompt, MCP skipped
-4. Both → preloaded in prompt + filtered MCP for additional discovery
+1. No skill params → only `auto_apply` skills injected into prompt
+2. `preload_skills` only → instructions injected into prompt (0 turns)
+3. `skill_filter` only → skill files written to `.skills/` in workspace for agent to discover
+4. Both → preloaded in prompt + remaining written to `.skills/` for discovery
 
 **Import/Export**:
 - `POST /api/skills/import` — accepts SKILL.md format (YAML frontmatter + markdown body + resources map), supports bulk and upsert
