@@ -57,26 +57,7 @@ export async function ensureUserKey(userId: string): Promise<string | null> {
     const orgId = process.env.WORKOS_ORG_ID || (await discoverOrgId());
     if (!orgId) return null;
 
-    // 3. Check if a "Default" key already exists in WorkOS
-    const listRes = await fetch(
-      `https://api.workos.com/organizations/${orgId}/api_keys`,
-      {
-        headers: { Authorization: `Bearer ${WORKOS_API_KEY}` },
-      },
-    );
-    if (listRes.ok) {
-      const listData = await listRes.json();
-      const existingDefault = (listData.data || []).find(
-        (k: any) => k.name === "Default",
-      );
-      if (existingDefault) {
-        // Key exists in WorkOS but not in DB — we can't recover the value,
-        // so just store the ID with a placeholder (value is only shown on create)
-        return null;
-      }
-    }
-
-    // 4. Create key via WorkOS API
+    // 3. Create a new key via WorkOS API (always — we need the value which is only returned on create)
     const res = await fetch(
       `https://api.workos.com/organizations/${orgId}/api_keys`,
       {
